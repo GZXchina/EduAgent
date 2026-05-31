@@ -17,6 +17,8 @@ class AgentState(TypedDict, total=False):
     video_script: dict[str, Any]
     resource_result: dict[str, Any]
     evaluation_report: dict[str, Any]
+    evaluation_suggestions: list[str]
+    loop_count: int
     messages: Annotated[list[dict[str, Any]], operator.add]
     session_id: str | None
     user_input: str

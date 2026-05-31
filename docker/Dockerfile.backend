@@ -9,9 +9,25 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debia
 COPY requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r /app/requirements.txt
 
-COPY . /app
+# 按目录复制项目代码（避免拷贝 .venv、node_modules、__pycache__ 等无用文件）
+COPY agents/           /app/agents/
+COPY api/              /app/api/
+COPY backend/          /app/backend/
+COPY database/         /app/database/
+COPY workflows/        /app/workflows/
+COPY services/         /app/services/
+COPY rag/              /app/rag/
+COPY schemas/          /app/schemas/
+COPY prompts/          /app/prompts/
+COPY knowledge/        /app/knowledge/
+
+# 向量数据库目录（运行时由 volume 挂载持久化）
+RUN mkdir -p /app/vector_db/chroma
 
 ENV PYTHONPATH=/app
 EXPOSE 8000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

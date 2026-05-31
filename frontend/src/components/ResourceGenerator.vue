@@ -13,7 +13,7 @@
  *
  * 依赖安装：npm install mermaid
  */
-import { ref, nextTick, onBeforeUnmount } from 'vue'
+import { ref, nextTick, onBeforeUnmount, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mermaid from 'mermaid'
@@ -25,16 +25,13 @@ const result = ref('')
 const loading = ref(false)
 const error = ref('')
 const actionFeedback = ref('')
+const mermaidContainerRef = ref<HTMLDivElement | null>(null)
+const mermaidRenderFailed = ref(false)
 
 const progressPercent = ref(0)
 let progressTimer: ReturnType<typeof setInterval> | null = null
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'default',
-  securityLevel: 'loose',
-  fontFamily: 'Inter, system-ui, sans-serif',
-})
+
 
 const resourceTypes = [
   { key: 'ppt' as const, label: 'PPT课件', icon: '📊', desc: '生成教学课件大纲', color: 'from-orange-400 to-red-500', bg: 'bg-orange-50', text: 'text-orange-600', ring: 'ring-orange-400/20' },
@@ -86,12 +83,15 @@ function extractMermaidCode(text: string): string | null {
   return match ? match[1].trim() : null
 }
 
-async function renderMermaidDiagram(code: string, container: HTMLElement) {
+async function renderMermaidDiagram(code: string) {
+  if (!mermaidContainerRef.value) return
+  mermaidRenderFailed.value = false
   try {
-    const { svg } = await mermaid.render('mermaid-diagram', code)
-    container.innerHTML = svg
+    const id = `mermaid-diagram-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+    const { svg } = await mermaid.render(id, code)
+    mermaidContainerRef.value.innerHTML = svg
   } catch {
-    container.innerHTML = `<pre class="text-xs text-surface-500 p-3">Mermaid 渲染失败，请检查语法</pre>`
+    mermaidRenderFailed.value = true
   }
 }
 
@@ -142,8 +142,7 @@ async function generateResource() {
     if (resourceType.value === 'mindmap') {
       const mermaidCode = extractMermaidCode(result.value)
       if (mermaidCode) {
-        const container = document.getElementById('mermaid-container')
-        if (container) await renderMermaidDiagram(mermaidCode, container)
+        await renderMermaidDiagram(mermaidCode)
       }
     }
   } catch (e) {
@@ -196,6 +195,31 @@ function downloadResult() {
   actionFeedback.value = '下载中...'
   setTimeout(() => { actionFeedback.value = '' }, 2000)
 }
+
+watch([resourceType, result], async ([type, res]) => {
+  if (type === 'mindmap' && res) {
+    await nextTick()
+    const mermaidCode = extractMermaidCode(res)
+    if (mermaidCode) {
+      await renderMermaidDiagram(mermaidCode)
+    }
+  }
+})
+
+onMounted(() => {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'default',
+    securityLevel: 'loose',
+    fontFamily: 'Inter, system-ui, sans-serif',
+  })
+  if (resourceType.value === 'mindmap' && result.value) {
+    const mermaidCode = extractMermaidCode(result.value)
+    if (mermaidCode) {
+      renderMermaidDiagram(mermaidCode)
+    }
+  }
+})
 
 onBeforeUnmount(() => {
   if (progressTimer) clearInterval(progressTimer)
@@ -363,10 +387,19 @@ onBeforeUnmount(() => {
         <!-- 思维导图：Mermaid渲染 -->
         <div v-else-if="resourceType === 'mindmap'">
           <div
-            v-if="extractMermaidCode(result)"
-            id="mermaid-container"
+            v-if="extractMermaidCode(result) && !mermaidRenderFailed"
+            ref="mermaidContainerRef"
             class="flex justify-center overflow-auto max-h-[600px] p-2"
           />
+          <div v-else-if="mermaidRenderFailed" class="space-y-3">
+            <div class="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
+              <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+              </svg>
+              <span>Mermaid 渲染失败，已显示原始文本</span>
+            </div>
+            <pre class="whitespace-pre-wrap text-sm text-surface-600 leading-relaxed max-h-[600px] overflow-y-auto">{{ result }}</pre>
+          </div>
           <pre v-else class="whitespace-pre-wrap text-sm text-surface-600 leading-relaxed max-h-[600px] overflow-y-auto">{{ result }}</pre>
         </div>
 

@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import chat, health, profile, rag, voice, evaluation
+from api.routes import chat, evaluation, health, profile, progress, rag, resources, voice, workflow
 from backend.core.logging_config import setup_logging
 from backend.core.redis_client import get_redis
 from backend.settings import get_settings
@@ -64,3 +64,6 @@ app.include_router(rag.router)
 app.include_router(profile.router)
 app.include_router(voice.router)
 app.include_router(evaluation.router)
+app.include_router(resources.router)
+app.include_router(progress.router)
+app.include_router(workflow.router)
