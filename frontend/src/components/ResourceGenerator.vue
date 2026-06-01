@@ -17,6 +17,7 @@ import { ref, nextTick, onBeforeUnmount, watch, onMounted } from 'vue'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import mermaid from 'mermaid'
+import VideoPlayer from './VideoPlayer.vue'
 
 const topic = ref('Python循环语句')
 const sessionId = ref('')
@@ -28,10 +29,63 @@ const actionFeedback = ref('')
 const mermaidContainerRef = ref<HTMLDivElement | null>(null)
 const mermaidRenderFailed = ref(false)
 
+async function trackBehavior(action: string, detail: Record<string, unknown> = {}) {
+  if (!sessionId.value) return
+  try {
+    await fetch('/api/evaluation/track-behavior', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId.value,
+        action,
+        detail,
+        duration_minutes: 0,
+      }),
+    })
+  } catch {
+    /* 静默失败 */
+  }
+}
+
+const recommendations = ref<RecommendationItem[]>([])
+const recLoading = ref(false)
+const recError = ref('')
+
+interface RecommendationItem {
+  id: number
+  resource_type: string
+  resource_label: string
+  topic: string
+  preview: string
+  relevance_score: number
+  reasons: string[]
+}
+
 const progressPercent = ref(0)
 let progressTimer: ReturnType<typeof setInterval> | null = null
 
+interface VideoSceneData {
+  scene_number: number
+  duration: string
+  content: string
+  visual_description: string
+  audio_notes: string | null
+  audio_base64: string | null
+  audio_mime: string
+}
 
+interface VideoGenerateData {
+  topic: string
+  total_duration: string
+  total_scenes: number
+  scenes: VideoSceneData[]
+  suggestions: string[]
+  source: string
+  tts_available: boolean
+}
+
+const videoData = ref<VideoGenerateData | null>(null)
+const videoError = ref('')
 
 const resourceTypes = [
   { key: 'ppt' as const, label: 'PPT课件', icon: '📊', desc: '生成教学课件大纲', color: 'from-orange-400 to-red-500', bg: 'bg-orange-50', text: 'text-orange-600', ring: 'ring-orange-400/20' },
@@ -119,8 +173,15 @@ function finishProgress() {
 async function generateResource() {
   error.value = ''
   result.value = ''
+  videoData.value = null
+  videoError.value = ''
   loading.value = true
   startProgress()
+
+  if (resourceType.value === 'video') {
+    await generateVideoResource()
+    return
+  }
 
   const prompt = getResourcePrompt()
   try {
@@ -138,6 +199,8 @@ async function generateResource() {
     result.value = data.reply ?? ''
     finishProgress()
     await nextTick()
+    fetchRecommendations()
+    trackBehavior('resource_generate', { resource_type: resourceType.value })
     
     if (resourceType.value === 'mindmap') {
       const mermaidCode = extractMermaidCode(result.value)
@@ -164,6 +227,41 @@ function getResourcePrompt(): string {
     video: `请为"${topic.value}"生成视频脚本，包含场景、旁白和时长`,
   }
   return prompts[resourceType.value]
+}
+
+async function generateVideoResource() {
+  try {
+    const res = await fetch('/api/video/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        topic: topic.value,
+        session_id: sessionId.value || undefined,
+      }),
+    })
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error((errData as { detail?: string }).detail || `HTTP ${res.status}`)
+    }
+    const data: VideoGenerateData = await res.json()
+    videoData.value = data
+    finishProgress()
+    await nextTick()
+    fetchRecommendations()
+    trackBehavior('resource_generate', { resource_type: 'video' })
+  } catch (e) {
+    videoError.value = e instanceof Error ? e.message : '视频生成失败'
+    progressPercent.value = 0
+    if (progressTimer) clearInterval(progressTimer)
+    progressTimer = null
+  } finally {
+    loading.value = false
+  }
+}
+
+function closeVideo() {
+  videoData.value = null
+  videoError.value = ''
 }
 
 async function copyResult() {
@@ -196,6 +294,30 @@ function downloadResult() {
   setTimeout(() => { actionFeedback.value = '' }, 2000)
 }
 
+async function fetchRecommendations() {
+  if (!sessionId.value) return
+  recLoading.value = true
+  recError.value = ''
+  try {
+    const res = await fetch(`/api/recommend/${sessionId.value}?limit=6`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    recommendations.value = data.recommendations ?? []
+  } catch (e) {
+    recError.value = e instanceof Error ? e.message : '推荐加载失败'
+    recommendations.value = []
+  } finally {
+    recLoading.value = false
+  }
+}
+
+watch(resourceType, () => {
+  result.value = ''
+  videoData.value = null
+  error.value = ''
+  videoError.value = ''
+})
+
 watch([resourceType, result], async ([type, res]) => {
   if (type === 'mindmap' && res) {
     await nextTick()
@@ -204,6 +326,10 @@ watch([resourceType, result], async ([type, res]) => {
       await renderMermaidDiagram(mermaidCode)
     }
   }
+})
+
+watch(sessionId, (newId) => {
+  if (newId) fetchRecommendations()
 })
 
 onMounted(() => {
@@ -315,7 +441,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 骨架屏 -->
-    <div v-if="loading && !result" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3">
+    <div v-if="loading && !result && !videoData" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3">
       <div class="skeleton h-4 w-1/3" />
       <div class="skeleton h-3 w-full" />
       <div class="skeleton h-3 w-5/6" />
@@ -324,7 +450,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 生成结果 -->
-    <div v-if="result" class="animate-slide-up space-y-3">
+    <div v-if="result && resourceType !== 'video'" class="animate-slide-up space-y-3">
       <!-- 操作栏 -->
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
@@ -420,6 +546,18 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 视频播放器 -->
+    <div v-if="videoData" class="animate-slide-up">
+      <VideoPlayer
+        :topic="videoData.topic"
+        :total-duration="videoData.total_duration"
+        :scenes="videoData.scenes"
+        :suggestions="videoData.suggestions"
+        :tts-available="videoData.tts_available"
+        @close="closeVideo"
+      />
+    </div>
+
     <!-- Toast -->
     <transition name="toast">
       <div
@@ -431,6 +569,75 @@ onBeforeUnmount(() => {
     </transition>
 
     <p v-if="error" class="text-sm text-rose-500 bg-rose-50 rounded-xl px-4 py-3 border border-rose-200 animate-slide-up">{{ error }}</p>
+    <p v-if="videoError" class="text-sm text-rose-500 bg-rose-50 rounded-xl px-4 py-3 border border-rose-200 animate-slide-up">{{ videoError }}</p>
+
+    <div v-if="sessionId && (recommendations.length > 0 || recLoading)" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3 animate-slide-up">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🎯</span>
+          <h3 class="text-sm font-bold text-surface-700">智能推荐资源</h3>
+          <span class="text-[11px] text-surface-400 bg-surface-100 rounded-full px-2 py-0.5">基于你的画像</span>
+        </div>
+        <button
+          type="button"
+          class="text-xs text-brand-500 hover:text-brand-600 transition-colors flex items-center gap-1"
+          @click="fetchRecommendations"
+          :disabled="recLoading"
+        >
+          <svg class="w-3.5 h-3.5" :class="recLoading ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+          刷新
+        </button>
+      </div>
+
+      <div v-if="recLoading" class="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div v-for="i in 3" :key="i" class="rounded-xl border border-surface-100 p-3 space-y-2">
+          <div class="skeleton h-3 w-16" />
+          <div class="skeleton h-4 w-full" />
+          <div class="skeleton h-3 w-2/3" />
+        </div>
+      </div>
+
+      <div v-else class="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <div
+          v-for="item in recommendations"
+          :key="item.id"
+          class="rounded-xl border border-surface-200 hover:border-brand-200 hover:shadow-sm p-3 transition-all cursor-pointer group"
+          @click="resourceType = (item.resource_type as 'ppt' | 'quiz' | 'code' | 'mindmap' | 'video'); topic = item.topic || topic; generateResource()"
+        >
+          <div class="flex items-center justify-between mb-1.5">
+            <span
+              class="text-[10px] font-semibold rounded-full px-2 py-0.5"
+              :class="resourceTypes.find(r => r.key === item.resource_type)?.bg + ' ' + (resourceTypes.find(r => r.key === item.resource_type)?.text ?? '')"
+            >
+              {{ item.resource_label }}
+            </span>
+            <div class="flex items-center gap-0.5">
+              <span class="text-[10px] font-bold" :class="item.relevance_score >= 70 ? 'text-emerald-600' : item.relevance_score >= 50 ? 'text-amber-600' : 'text-surface-400'">
+                {{ item.relevance_score }}
+              </span>
+              <span class="text-[9px] text-surface-400">分</span>
+            </div>
+          </div>
+          <div class="text-sm font-medium text-surface-700 group-hover:text-brand-600 transition-colors line-clamp-2">
+            {{ item.topic || item.preview }}
+          </div>
+          <div class="text-[11px] text-surface-400 mt-1 line-clamp-1">{{ item.preview }}</div>
+          <div class="flex flex-wrap gap-1 mt-2">
+            <span
+              v-for="reason in item.reasons.slice(0, 2)"
+              :key="reason"
+              class="text-[9px] bg-surface-50 text-surface-500 rounded-md px-1.5 py-0.5"
+            >
+              {{ reason }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p v-if="recError" class="text-xs text-amber-500">{{ recError }}</p>
   </div>
 </template>
 

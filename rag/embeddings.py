@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
+
+# 设置 HuggingFace 国内镜像源，解决网络访问问题
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 from backend.settings import get_settings
 

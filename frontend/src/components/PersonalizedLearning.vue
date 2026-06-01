@@ -1,13 +1,13 @@
 <script setup lang="ts">
 /**
- * PersonalizedLearning.vue - 个性化学习中心重构
+ * PersonalizedLearning.vue - 个性化学习中心
  *
- * 核心改动：
- * 1. SVG 雷达图：将 student_profile 6 个维度可视化映射到六边形雷达图
- * 2. 标签云：从画像字段提取关键词，彩色标签 + 尺寸权重展示
- * 3. 时间轴学习路径：解析后端回复，渲染为步骤条组件，三色状态区分
- * 4. 浅色主题全面适配：圆角卡片 + 微阴影 + 渐变图标
- * 5. 保持原有 /api/profile/analyze 和 /api/chat API 调用逻辑不变
+ * 功能：
+ * 1. SVG 雷达图：student_profile 6 维度可视化映射
+ * 2. 标签云：画像字段关键词彩色标签展示
+ * 3. 时间轴学习路径：调用 /api/learning-path/generate 获取结构化路径
+ * 4. 资源推送：学习路径每步关联推荐资源卡片
+ * 5. 智能推荐：基于画像的资源精准推送
  */
 
 import { ref, computed, nextTick } from 'vue'
@@ -15,10 +15,23 @@ import { ref, computed, nextTick } from 'vue'
 const message = ref('我是计算机专业学生，想备战蓝桥杯，初学Python，喜欢看图解，每天1小时，循环不太会')
 const sessionId = ref('')
 const profileJson = ref('')
-const learningPathText = ref('')
 const loading = ref(false)
 const error = ref('')
 const activeTab = ref<'profile' | 'path'>('profile')
+
+const recommendations = ref<RecommendationItem[]>([])
+const recLoading = ref(false)
+const recError = ref('')
+
+interface RecommendationItem {
+  id: number
+  resource_type: string
+  resource_label: string
+  topic: string
+  preview: string
+  relevance_score: number
+  reasons: string[]
+}
 
 interface ProfileData {
   knowledge_level: string
@@ -33,7 +46,40 @@ interface ProfileData {
   raw_input: string
 }
 
+interface StepResource {
+  id: number
+  resource_type: string
+  resource_label: string
+  resource_icon: string
+  topic: string
+  preview?: string
+  content?: Record<string, unknown>
+}
+
+interface StepWithResources {
+  week: number
+  title: string
+  duration: string
+  topics: string[]
+  recommended_resource_types: string[]
+  assessment: string
+  available_resources: StepResource[]
+}
+
+interface PathOverview {
+  path_name: string
+  total_weeks: number
+  focus_areas: string[]
+  suggestions: string[]
+  source: string
+}
+
 const parsedProfile = ref<ProfileData | null>(null)
+const stepsWithResources = ref<StepWithResources[]>([])
+const pathOverview = ref<PathOverview | null>(null)
+const pathProfileSummary = ref('')
+const pathTotalResources = ref(0)
+const expandedStep = ref<number | null>(null)
 
 function parseKnowledgeScore(level: string): number {
   const map: Record<string, number> = { beginner: 25, intermediate: 55, advanced: 85, unknown: 30 }
@@ -157,58 +203,20 @@ const profileTags = computed<TagItem[]>(() => {
   return tags
 })
 
-interface TimelineStep {
-  week: number
-  title: string
-  status: 'done' | 'active' | 'pending'
-  topics: string[]
+function toggleStep(week: number) {
+  expandedStep.value = expandedStep.value === week ? null : week
 }
 
-const timelineSteps = computed<TimelineStep[]>(() => {
-  const text = learningPathText.value
-  if (!text) return []
-  
-  const steps: TimelineStep[] = []
-  const weekRegex = /第\s*(\d+)\s*周[：:]\s*(.+?)(?=\n|第\s*\d+\s*周|$)/g
-  let match: RegExpExecArray | null
-  
-  while ((match = weekRegex.exec(text)) !== null) {
-    const topics: string[] = []
-    const content = match[2]
-    const topicMatch = content.match(/学习内容[：:]\s*(.+)/)
-    if (topicMatch) {
-      topicMatch[1].split(/[,，、]/).forEach(t => {
-        const trimmed = t.trim()
-        if (trimmed) topics.push(trimmed)
-      })
-    }
-    steps.push({
-      week: Number(match[1]),
-      title: content.split(/[：:]|\n/)[0]?.trim() ?? `第${match[1]}周`,
-      status: steps.length === 0 ? 'active' : 'pending',
-      topics: topics.length > 0 ? topics : [content.slice(0, 40) + (content.length > 40 ? '...' : '')],
-    })
+function getResourceTypeClass(type: string) {
+  const map: Record<string, string> = {
+    ppt: 'bg-rose-50 text-rose-600 border-rose-200',
+    quiz: 'bg-amber-50 text-amber-600 border-amber-200',
+    code: 'bg-blue-50 text-blue-600 border-blue-200',
+    mindmap: 'bg-purple-50 text-purple-600 border-purple-200',
+    video: 'bg-cyan-50 text-cyan-600 border-cyan-200',
   }
-  
-  if (steps.length === 0) {
-    const lines = text.split('\n').filter(l => l.trim())
-    lines.forEach((line, i) => {
-      steps.push({
-        week: i + 1,
-        title: line.slice(0, 50),
-        status: i === 0 ? 'active' : 'pending',
-        topics: [line.slice(0, 80)],
-      })
-    })
-  }
-  
-  if (steps.length > 0) {
-    steps[0].status = 'done'
-    if (steps.length > 1) steps[1].status = 'active'
-  }
-  
-  return steps
-})
+  return map[type] ?? 'bg-surface-100 text-surface-500 border-surface-200'
+}
 
 function tryParseProfile(raw: string): ProfileData | null {
   try {
@@ -240,6 +248,7 @@ async function analyzeProfile() {
     profileJson.value = JSON.stringify(data.profile, null, 2)
     parsedProfile.value = tryParseProfile(profileJson.value)
     await nextTick()
+    fetchRecommendations()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '画像分析失败'
   } finally {
@@ -249,26 +258,51 @@ async function analyzeProfile() {
 
 async function generatePath() {
   error.value = ''
-  learningPathText.value = ''
+  stepsWithResources.value = []
+  pathOverview.value = null
+  pathProfileSummary.value = ''
+  pathTotalResources.value = 0
   loading.value = true
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/learning-path/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        message: '请根据我的画像生成学习路径',
-        session_id: sessionId.value || undefined,
+        session_id: sessionId.value,
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
-    if (data.session_id) sessionId.value = data.session_id
-    learningPathText.value = data.reply ?? ''
+    if (!data.profile_found) {
+      error.value = data.message ?? '请先完成画像分析'
+      return
+    }
+    pathProfileSummary.value = data.profile_summary ?? ''
+    pathOverview.value = data.learning_path ?? null
+    stepsWithResources.value = data.steps_with_resources ?? []
+    pathTotalResources.value = data.total_available_resources ?? 0
     await nextTick()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '路径生成失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function fetchRecommendations() {
+  if (!sessionId.value) return
+  recLoading.value = true
+  recError.value = ''
+  try {
+    const res = await fetch(`/api/recommend/${sessionId.value}?limit=6`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    recommendations.value = data.recommendations ?? []
+  } catch (e) {
+    recError.value = e instanceof Error ? e.message : '推荐加载失败'
+    recommendations.value = []
+  } finally {
+    recLoading.value = false
   }
 }
 
@@ -480,6 +514,79 @@ function tagColorClass(color: string): string {
         <summary class="cursor-pointer px-4 py-2.5 text-xs font-medium text-surface-400 hover:text-surface-500 select-none">原始 JSON 数据</summary>
         <pre class="overflow-x-auto p-4 text-xs text-surface-500 border-t border-surface-100">{{ profileJson }}</pre>
       </details>
+
+      <div v-if="sessionId && (recommendations.length > 0 || recLoading)" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3 animate-slide-up">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🎯</span>
+            <h3 class="text-sm font-bold text-surface-700">智能推荐资源</h3>
+            <span class="text-[11px] text-surface-400 bg-surface-100 rounded-full px-2 py-0.5">基于你的画像</span>
+          </div>
+          <button
+            type="button"
+            class="text-xs text-brand-500 hover:text-brand-600 transition-colors flex items-center gap-1"
+            @click="fetchRecommendations"
+            :disabled="recLoading"
+          >
+            <svg class="w-3.5 h-3.5" :class="recLoading ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            刷新
+          </button>
+        </div>
+
+        <div v-if="recLoading" class="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div v-for="i in 3" :key="i" class="rounded-xl border border-surface-100 p-3 space-y-2">
+            <div class="skeleton h-3 w-16" />
+            <div class="skeleton h-4 w-full" />
+            <div class="skeleton h-3 w-2/3" />
+          </div>
+        </div>
+
+        <div v-else class="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div
+            v-for="item in recommendations"
+            :key="item.id"
+            class="rounded-xl border border-surface-200 hover:border-brand-200 hover:shadow-sm p-3 transition-all cursor-pointer group"
+          >
+            <div class="flex items-center justify-between mb-1.5">
+              <span
+                class="text-[10px] font-semibold rounded-full px-2 py-0.5"
+                :class="[
+                  item.resource_type === 'ppt' ? 'bg-rose-50 text-rose-600' :
+                  item.resource_type === 'quiz' ? 'bg-amber-50 text-amber-600' :
+                  item.resource_type === 'code' ? 'bg-blue-50 text-blue-600' :
+                  item.resource_type === 'mindmap' ? 'bg-purple-50 text-purple-600' :
+                  'bg-cyan-50 text-cyan-600'
+                ]"
+              >
+                {{ item.resource_label }}
+              </span>
+              <div class="flex items-center gap-0.5">
+                <span class="text-[10px] font-bold" :class="item.relevance_score >= 70 ? 'text-emerald-600' : item.relevance_score >= 50 ? 'text-amber-600' : 'text-surface-400'">
+                  {{ item.relevance_score }}
+                </span>
+                <span class="text-[9px] text-surface-400">分</span>
+              </div>
+            </div>
+            <div class="text-sm font-medium text-surface-700 group-hover:text-brand-600 transition-colors line-clamp-2">
+              {{ item.topic || item.preview }}
+            </div>
+            <div class="text-[11px] text-surface-400 mt-1 line-clamp-1">{{ item.preview }}</div>
+            <div class="flex flex-wrap gap-1 mt-2">
+              <span
+                v-for="reason in item.reasons.slice(0, 2)"
+                :key="reason"
+                class="text-[9px] bg-surface-50 text-surface-500 rounded-md px-1.5 py-0.5"
+              >
+                {{ reason }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p v-if="recError" class="text-xs text-amber-500">{{ recError }}</p>
     </div>
 
     <!-- 学习路径 Tab -->
@@ -496,6 +603,10 @@ function tagColorClass(color: string): string {
         {{ loading ? '生成中...' : '🗺️ 生成学习路径' }}
       </button>
 
+      <p v-if="!sessionId && !loading" class="text-sm text-surface-400 bg-surface-50 rounded-xl px-4 py-3 border border-surface-100">
+        👈 请先在「学生画像」Tab 中完成画像分析
+      </p>
+
       <!-- 骨架屏 -->
       <div v-if="loading" class="rounded-2xl border border-surface-200 bg-white p-6 space-y-4">
         <div class="skeleton h-5 w-32" />
@@ -508,62 +619,159 @@ function tagColorClass(color: string): string {
         </div>
       </div>
 
-      <!-- 时间轴 -->
-      <div v-if="timelineSteps.length > 0" class="rounded-2xl border border-surface-200 bg-white p-6 animate-slide-up">
-        <h3 class="text-sm font-semibold text-surface-700 mb-6 flex items-center gap-2">
-          <span class="w-1.5 h-4 bg-brand-500 rounded-full" />
-          学习进度时间轴
-        </h3>
+      <!-- 路径概览卡片 -->
+      <div v-if="pathOverview" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3 animate-slide-up">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">🗺️</span>
+            <h3 class="text-sm font-bold text-surface-800">{{ pathOverview.path_name }}</h3>
+          </div>
+          <span class="text-[11px] text-surface-400 bg-surface-100 rounded-full px-2.5 py-0.5">
+            {{ pathOverview.total_weeks }} 周 · {{ pathOverview.source === 'spark' ? 'AI 生成' : '智能规划' }}
+          </span>
+        </div>
+
+        <div v-if="pathProfileSummary" class="text-xs text-surface-400 bg-surface-50 rounded-lg px-3 py-2">
+          {{ pathProfileSummary }}
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <span
+            v-for="focus in pathOverview.focus_areas"
+            :key="focus"
+            class="text-[11px] font-medium bg-brand-50 text-brand-600 rounded-full px-2.5 py-0.5 border border-brand-100"
+          >{{ focus }}</span>
+        </div>
+
+        <div v-if="pathOverview.suggestions.length > 0" class="border-t border-surface-100 pt-3">
+          <div class="text-[11px] font-semibold text-surface-500 mb-2">💡 学习建议</div>
+          <ul class="space-y-1">
+            <li
+              v-for="(s, si) in pathOverview.suggestions"
+              :key="si"
+              class="text-xs text-surface-500 flex items-start gap-1.5"
+            >
+              <span class="text-brand-400 mt-0.5">•</span>
+              {{ s }}
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 时间轴 + 资源推送 -->
+      <div v-if="stepsWithResources.length > 0" class="rounded-2xl border border-surface-200 bg-white p-6 animate-slide-up">
+        <div class="flex items-center justify-between mb-6">
+          <h3 class="text-sm font-semibold text-surface-700 flex items-center gap-2">
+            <span class="w-1.5 h-4 bg-brand-500 rounded-full" />
+            学习进度时间轴
+          </h3>
+          <span class="text-[11px] text-surface-400">共 {{ stepsWithResources.length }} 步 · {{ pathTotalResources }} 个资源</span>
+        </div>
+
         <div class="relative">
           <div class="space-y-0">
             <div
-              v-for="(step, i) in timelineSteps"
+              v-for="(step, i) in stepsWithResources"
               :key="i"
-              class="relative flex gap-4 pb-8 last:pb-0"
+              class="relative flex gap-4 pb-6 last:pb-0"
             >
-              <!-- 竖线 -->
+              <!-- 竖线 + 节点 -->
               <div class="flex flex-col items-center shrink-0">
                 <div
-                  class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all"
+                  class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all cursor-pointer"
                   :class="{
-                    'bg-emerald-500 text-white shadow-md shadow-emerald-500/25': step.status === 'done',
-                    'bg-brand-500 text-white shadow-md shadow-brand-500/25 ring-4 ring-brand-100': step.status === 'active',
-                    'bg-surface-200 text-surface-400': step.status === 'pending',
+                    'bg-emerald-500 text-white shadow-md shadow-emerald-500/25': i === 0,
+                    'bg-brand-500 text-white shadow-md shadow-brand-500/25 ring-4 ring-brand-100': i === 1,
+                    'bg-surface-200 text-surface-400': i > 1,
                   }"
+                  @click="toggleStep(step.week)"
                 >
-                  <svg v-if="step.status === 'done'" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                  <svg v-if="i === 0" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
                     <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                   <span v-else>{{ step.week }}</span>
                 </div>
                 <div
-                  v-if="i < timelineSteps.length - 1"
-                  class="w-0.5 flex-1 min-h-[24px]"
-                  :class="step.status === 'done' ? 'bg-emerald-300' : 'bg-surface-200'"
+                  v-if="i < stepsWithResources.length - 1"
+                  class="w-0.5 flex-1 min-h-[20px]"
+                  :class="i === 0 ? 'bg-emerald-300' : 'bg-surface-200'"
                 />
               </div>
-              <!-- 内容 -->
+
+              <!-- 步骤内容 -->
               <div class="flex-1 min-w-0 pt-1.5">
-                <div class="flex items-center gap-2 mb-1.5">
+                <div class="flex items-center gap-2 mb-1.5 cursor-pointer" @click="toggleStep(step.week)">
                   <h4 class="text-sm font-semibold text-surface-800">{{ step.title }}</h4>
                   <span
                     class="text-[10px] font-medium rounded-full px-2 py-0.5"
                     :class="{
-                      'bg-emerald-50 text-emerald-600': step.status === 'done',
-                      'bg-brand-50 text-brand-600': step.status === 'active',
-                      'bg-surface-100 text-surface-400': step.status === 'pending',
+                      'bg-emerald-50 text-emerald-600': i === 0,
+                      'bg-brand-50 text-brand-600': i === 1,
+                      'bg-surface-100 text-surface-400': i > 1,
                     }"
                   >
-                    {{ step.status === 'done' ? '已完成' : step.status === 'active' ? '进行中' : '未开始' }}
+                    {{ i === 0 ? '已完成' : i === 1 ? '进行中' : '未开始' }}
                   </span>
+                  <span class="text-[11px] text-surface-400">{{ step.duration }}</span>
                 </div>
-                <div class="flex flex-wrap gap-1.5">
+
+                <div class="flex flex-wrap gap-1.5 mb-2">
                   <span
-                    v-for="(topic, ti) in step.topics.slice(0, 4)"
+                    v-for="(topic, ti) in step.topics.slice(0, 6)"
                     :key="ti"
                     class="text-[11px] text-surface-500 bg-surface-50 rounded-md px-2 py-0.5 border border-surface-100"
                   >{{ topic }}</span>
-                  <span v-if="step.topics.length > 4" class="text-[11px] text-surface-400">+{{ step.topics.length - 4 }}</span>
+                  <span v-if="step.topics.length > 6" class="text-[11px] text-surface-400">+{{ step.topics.length - 6 }}</span>
+                </div>
+
+                <div class="flex items-center gap-2 text-[11px] text-surface-400">
+                  <span class="flex items-center gap-1">
+                    <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                    评估：{{ step.assessment }}
+                  </span>
+                  <span v-if="step.available_resources.length > 0" class="text-brand-500 font-medium">
+                    已关联 {{ step.available_resources.length }} 个资源
+                  </span>
+                </div>
+
+                <!-- 资源推送卡片 -->
+                <div
+                  v-if="expandedStep === step.week && step.available_resources.length > 0"
+                  class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 animate-slide-up"
+                >
+                  <div
+                    v-for="res in step.available_resources"
+                    :key="res.id"
+                    class="rounded-lg border border-surface-200 hover:border-brand-200 hover:shadow-sm p-2.5 transition-all cursor-pointer bg-surface-50"
+                  >
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="text-sm">{{ res.resource_icon }}</span>
+                      <span
+                        class="text-[10px] font-semibold rounded-full px-2 py-0.5 border"
+                        :class="getResourceTypeClass(res.resource_type)"
+                      >
+                        {{ res.resource_label }}
+                      </span>
+                    </div>
+                    <div class="text-xs font-medium text-surface-700 line-clamp-1">{{ res.topic }}</div>
+                    <div v-if="res.preview" class="text-[10px] text-surface-400 mt-0.5 line-clamp-1">{{ res.preview }}</div>
+                  </div>
+                </div>
+
+                <div
+                  v-if="expandedStep === step.week && step.available_resources.length === 0"
+                  class="mt-2 text-xs text-surface-400 bg-surface-50 rounded-lg px-3 py-2"
+                >
+                  暂无可关联资源，建议先在「资源生成」模块生成 {{ step.recommended_resource_types.join('、') }} 等资源
+                </div>
+
+                <div
+                  v-if="expandedStep !== step.week && step.available_resources.length > 0"
+                  class="mt-2 flex items-center gap-1 text-[10px] text-brand-500 cursor-pointer"
+                  @click="toggleStep(step.week)"
+                >
+                  <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                  展开查看关联资源
                 </div>
               </div>
             </div>
@@ -571,11 +779,10 @@ function tagColorClass(color: string): string {
         </div>
       </div>
 
-      <!-- 原文 -->
-      <details v-if="learningPathText" class="rounded-xl border border-surface-200 bg-surface-50 overflow-hidden">
-        <summary class="cursor-pointer px-4 py-2.5 text-xs font-medium text-surface-400 hover:text-surface-500 select-none">路径原文</summary>
-        <div class="whitespace-pre-wrap p-4 text-sm text-surface-600 border-t border-surface-100 leading-relaxed">{{ learningPathText }}</div>
-      </details>
+      <!-- 无数据提示 -->
+      <div v-if="!loading && pathOverview && stepsWithResources.length === 0" class="rounded-2xl border border-surface-200 bg-surface-50 p-6 text-center">
+        <p class="text-sm text-surface-400">学习路径已生成，但无详细步骤数据</p>
+      </div>
     </div>
 
     <p v-if="error" class="text-sm text-rose-500 bg-rose-50 rounded-xl px-4 py-3 border border-rose-200 animate-slide-up">{{ error }}</p>

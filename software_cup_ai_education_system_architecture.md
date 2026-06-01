@@ -1,13 +1,15 @@
 # EduAgent —— 基于讯飞星火与多智能体协同的高校个性化学习平台
 
-> 本文档已转换为标准 Markdown（.md）工程文档格式，可直接用于 Trae、Cursor、Claude Code、Windsurf 等 AI IDE 进行 Vibe Coding 开发。
-
 ## 推荐工程目录
 
 ```text
 EduAgent/
 ├── frontend/                  # Vue3前端
+│   └── src/components/        # ChatLearning, PersonalizedLearning, ResourceGenerator,
+│                              # EvaluationCenter, VoiceLearning, ResultDisplay, VideoPlayer
 ├── backend/                   # FastAPI后端
+├── api/routes/                # 接口层（health, chat, rag, profile, voice, evaluation,
+│                              # workflow, resources, progress, learning_path, recommend, video）
 ├── agents/                    # 多智能体模块
 │   ├── profile_agent.py
 │   ├── planner_agent.py
@@ -15,15 +17,22 @@ EduAgent/
 │   ├── ppt_agent.py
 │   ├── quiz_agent.py
 │   ├── code_agent.py
+│   ├── mindmap_agent.py
+│   ├── video_agent.py
 │   ├── tutor_agent.py
 │   ├── evaluation_agent.py
 │   └── safety_agent.py
+├── services/                  # 业务服务层
+│   ├── profile_service.py
+│   ├── voice_service.py
+│   ├── evaluation_service.py
+│   ├── learning_path_service.py
+│   └── recommendation_service.py
 ├── workflows/                 # LangGraph工作流
 ├── prompts/                   # Prompt模板
 ├── rag/                       # RAG模块
 ├── vector_db/                 # 向量数据库
 ├── knowledge/                 # 课程知识库
-├── api/                       # 接口层
 ├── database/                  # 数据库模型
 ├── docs/                      # 项目文档
 ├── docker/                    # Docker部署
@@ -43,6 +52,9 @@ EduAgent/
 第八阶段：学习评估系统
 第九阶段：前端UI优化
 第十阶段：Docker部署
+补充：学习路径与智能推荐
+补充：AI视频生成（脚本+TTS）
+补充：前端可视化增强（雷达图、视频播放器）
 ```
 
 ## 推荐Trae Vibe Coding提示词
@@ -63,7 +75,6 @@ EduAgent/
 10. 所有模块采用工程化目录结构
 11. 代码需具备可维护性与模块化设计
 ```
-
 
 # 一、系统总体架构图
 
@@ -126,7 +137,7 @@ flowchart TB
     XF2 --> A
 ```
 
----
+***
 
 # 二、多智能体协同架构图
 
@@ -160,7 +171,7 @@ flowchart LR
     A11 --> A1
 ```
 
----
+***
 
 # 三、学生画像系统架构图
 
@@ -189,7 +200,7 @@ flowchart TB
     C --> D4[智能答疑优化]
 ```
 
----
+***
 
 # 四、RAG知识库架构图
 
@@ -221,7 +232,7 @@ flowchart TB
     G --> H[讯飞星火生成答案]
 ```
 
----
+***
 
 # 五、学习路径生成流程图
 
@@ -251,7 +262,7 @@ flowchart TD
     G --> H[重新优化学习路径]
 ```
 
----
+***
 
 # 六、AI资源生成流程图
 
@@ -279,7 +290,7 @@ flowchart LR
     E --> F[个性化学习资源输出]
 ```
 
----
+***
 
 # 七、智能答疑流程图
 
@@ -303,7 +314,7 @@ flowchart TD
     G --> H[讯飞TTS语音播报]
 ```
 
----
+***
 
 # 八、学习评估闭环架构图
 
@@ -329,26 +340,26 @@ flowchart LR
     E --> F[重新推荐学习资源]
 ```
 
----
+***
 
 # 九、推荐技术架构
 
-| 模块 | 技术方案 |
-|---|---|
-| 前端 | Vue3 + TypeScript + TailwindCSS |
-| 后端 | FastAPI |
-| Agent框架 | LangGraph |
-| RAG框架 | LangChain |
-| 向量数据库 | ChromaDB |
-| 主大模型 | 讯飞星火 Spark |
-| 语音识别 | 讯飞ASR |
-| 语音合成 | 讯飞TTS |
-| 图表可视化 | ECharts |
-| 数据库 | PostgreSQL |
-| 缓存 | Redis |
-| 部署方案 | Docker |
+| 模块      | 技术方案                            |
+| ------- | ------------------------------- |
+| 前端      | Vue3 + TypeScript + TailwindCSS |
+| 后端      | FastAPI                         |
+| Agent框架 | LangGraph                       |
+| RAG框架   | LangChain                       |
+| 向量数据库   | ChromaDB                        |
+| 主大模型    | 讯飞星火 Spark                      |
+| 语音识别    | 讯飞ASR                           |
+| 语音合成    | 讯飞TTS                           |
+| 图表可视化   | ECharts                         |
+| 数据库     | PostgreSQL                      |
+| 缓存      | Redis                           |
+| 部署方案    | Docker                          |
 
----
+***
 
 # 十、多智能体详细工作流设计
 
@@ -394,7 +405,7 @@ flowchart TD
     N --> E
 ```
 
----
+***
 
 # 十一、核心Agent详细设计
 
@@ -404,7 +415,7 @@ flowchart TD
 
 用于通过自然语言对话自动分析学生特征，生成动态学生画像。
 
----
+***
 
 ## 输入信息
 
@@ -418,7 +429,7 @@ flowchart TD
 }
 ```
 
----
+***
 
 ## 输出画像
 
@@ -432,7 +443,7 @@ flowchart TD
 }
 ```
 
----
+***
 
 ## 内部工作流
 
@@ -450,18 +461,18 @@ flowchart TD
     E --> F[推送给学习规划Agent]
 ```
 
----
+***
 
 ## 核心技术
 
-| 模块 | 技术 |
-|---|---|
-| 大模型分析 | 讯飞星火 |
-| Prompt工程 | LangChain |
-| 数据存储 | PostgreSQL |
-| 状态更新 | Redis |
+| 模块       | 技术         |
+| -------- | ---------- |
+| 大模型分析    | 讯飞星火       |
+| Prompt工程 | LangChain  |
+| 数据存储     | PostgreSQL |
+| 状态更新     | Redis      |
 
----
+***
 
 # 2. 学习规划Agent（Planner Agent）
 
@@ -469,7 +480,7 @@ flowchart TD
 
 根据学生画像生成动态学习路径。
 
----
+***
 
 ## 输入
 
@@ -478,7 +489,7 @@ flowchart TD
 - 知识掌握情况
 - 学习目标
 
----
+***
 
 ## 输出
 
@@ -490,7 +501,7 @@ Python基础
  → 面向对象
 ```
 
----
+***
 
 ## 工作流
 
@@ -510,7 +521,7 @@ flowchart TD
     E --> F[输出学习路径]
 ```
 
----
+***
 
 ## 创新点
 
@@ -519,7 +530,7 @@ flowchart TD
 - 个性化推荐
 - AI自动规划
 
----
+***
 
 # 3. 知识拆解Agent（Knowledge Agent）
 
@@ -527,7 +538,7 @@ flowchart TD
 
 对课程知识进行结构化拆解。
 
----
+***
 
 ## 示例
 
@@ -547,7 +558,7 @@ Python函数
 5. 实践案例
 ```
 
----
+***
 
 ## 工作流
 
@@ -565,7 +576,7 @@ flowchart LR
     D --> E[发送给资源生成Agent]
 ```
 
----
+***
 
 # 4. PPT生成Agent（PPT Agent）
 
@@ -573,7 +584,7 @@ flowchart LR
 
 自动生成课程PPT。
 
----
+***
 
 ## 输入
 
@@ -581,7 +592,7 @@ flowchart LR
 - 学生水平
 - 学习风格
 
----
+***
 
 ## 输出
 
@@ -592,7 +603,7 @@ flowchart LR
 ## 案例演示
 ```
 
----
+***
 
 ## 工作流
 
@@ -610,7 +621,7 @@ flowchart TD
     D --> E[PPT资源输出]
 ```
 
----
+***
 
 # 5. 题库生成Agent（Quiz Agent）
 
@@ -618,7 +629,7 @@ flowchart TD
 
 自动生成个性化练习题。
 
----
+***
 
 ## 支持题型
 
@@ -628,7 +639,7 @@ flowchart TD
 - 编程题
 - 综合案例题
 
----
+***
 
 ## 工作流
 
@@ -646,7 +657,7 @@ flowchart TD
     D --> E[难度评级]
 ```
 
----
+***
 
 # 6. 代码案例Agent（Code Agent）
 
@@ -654,7 +665,7 @@ flowchart TD
 
 自动生成编程实践案例。
 
----
+***
 
 ## 示例输出
 
@@ -663,7 +674,7 @@ for i in range(5):
     print(i)
 ```
 
----
+***
 
 ## 工作流
 
@@ -681,7 +692,7 @@ flowchart TD
     D --> E[生成项目案例]
 ```
 
----
+***
 
 # 7. 思维导图Agent（MindMap Agent）
 
@@ -689,7 +700,7 @@ flowchart TD
 
 自动生成知识结构图。
 
----
+***
 
 ## 工作流
 
@@ -705,7 +716,7 @@ flowchart LR
     C --> D[Mermaid思维导图输出]
 ```
 
----
+***
 
 # 8. 视频脚本Agent（Video Agent）
 
@@ -713,7 +724,7 @@ flowchart LR
 
 生成教学视频脚本。
 
----
+***
 
 ## 输出示例
 
@@ -723,7 +734,7 @@ flowchart LR
 镜头3：代码案例演示
 ```
 
----
+***
 
 ## 工作流
 
@@ -741,7 +752,7 @@ flowchart TD
     D --> E[视频脚本输出]
 ```
 
----
+***
 
 # 9. 答疑辅导Agent（Tutor Agent）
 
@@ -749,7 +760,7 @@ flowchart TD
 
 提供实时AI答疑。
 
----
+***
 
 ## 工作流
 
@@ -769,7 +780,7 @@ flowchart TD
     E --> F[语音播报]
 ```
 
----
+***
 
 # 10. 学习评估Agent（Evaluation Agent）
 
@@ -777,19 +788,19 @@ flowchart TD
 
 评估学生学习效果。
 
----
+***
 
 ## 分析维度
 
-| 维度 | 内容 |
-|---|---|
+| 维度   | 内容     |
+| ---- | ------ |
 | 学习时长 | 学习时间统计 |
-| 正确率 | 题目完成情况 |
+| 正确率  | 题目完成情况 |
 | 知识掌握 | 薄弱知识分析 |
 | 学习行为 | 学习习惯分析 |
-| 资源反馈 | 资源有效性 |
+| 资源反馈 | 资源有效性  |
 
----
+***
 
 ## 工作流
 
@@ -807,7 +818,7 @@ flowchart TD
     D --> E[重新推荐学习资源]
 ```
 
----
+***
 
 # 11. 安全审核Agent（Safety Agent）
 
@@ -815,7 +826,7 @@ flowchart TD
 
 防止AI幻觉与错误内容生成。
 
----
+***
 
 ## 审核内容
 
@@ -825,7 +836,7 @@ flowchart TD
 - 非课程内容
 - 代码风险检测
 
----
+***
 
 ## 工作流
 
@@ -843,7 +854,7 @@ flowchart TD
     D --> E[审核通过输出]
 ```
 
----
+***
 
 # 十二、LangGraph多智能体编排架构
 
@@ -877,7 +888,7 @@ flowchart LR
     EvaluationAgent --> END
 ```
 
----
+***
 
 # 十三、系统任务调度机制
 
@@ -885,7 +896,7 @@ flowchart LR
 
 系统采用LangGraph实现多智能体工作流调度。
 
----
+***
 
 ## 调度特点
 
@@ -902,7 +913,7 @@ flowchart LR
 }
 ```
 
----
+***
 
 ### 2. 并行资源生成
 
@@ -915,13 +926,13 @@ flowchart LR
 
 提高生成效率。
 
----
+***
 
 ### 3. 动态回流机制
 
 学习评估结果重新进入学生画像系统，实现动态学习闭环。
 
----
+***
 
 # 十四、Agent协同创新点
 
@@ -929,7 +940,7 @@ flowchart LR
 
 不同教学智能体承担不同角色，实现真正意义上的AI协同教学。
 
----
+***
 
 ## 2. 动态学习闭环
 
@@ -944,7 +955,7 @@ flowchart LR
 
 持续优化学习效果。
 
----
+***
 
 ## 3. 多模态学习资源生成
 
@@ -957,7 +968,7 @@ flowchart LR
 - 代码案例
 - 图解内容
 
----
+***
 
 ## 4. 讯飞AI深度融合
 
@@ -969,7 +980,7 @@ flowchart LR
 
 实现语音化、智能化学习体验。
 
----
+***
 
 # 十五、系统核心创新点
 
@@ -996,4 +1007,3 @@ flowchart LR
 ## 6. AI学习闭环
 
 系统形成“学习—评估—调整—再推荐”的完整学习闭环，实现持续优化的智能学习机制。
-

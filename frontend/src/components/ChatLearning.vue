@@ -72,53 +72,26 @@ function escapeAttr(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-let typewriterTimer: ReturnType<typeof setInterval> | null = null
-
-function startTypewriter(fullText: string): Promise<void> {
-  return new Promise((resolve) => {
-    const lastMsg = messages.value[messages.value.length - 1]
-    if (!lastMsg || lastMsg.role !== 'assistant') return resolve()
-    
-    let index = 0
-    const charsPerTick = 3
-    streaming.value = true
-    
-    typewriterTimer = setInterval(() => {
-      index += charsPerTick
-      if (index >= fullText.length) {
-        lastMsg.content = fullText
-        streaming.value = false
-        if (typewriterTimer) clearInterval(typewriterTimer)
-        typewriterTimer = null
-        resolve()
-        return
-      }
-      lastMsg.content = fullText.slice(0, index)
-    }, 10)
-  })
-}
-
-function stopTypewriter() {
-  if (typewriterTimer) {
-    clearInterval(typewriterTimer)
-    typewriterTimer = null
-  }
-  streaming.value = false
-  const lastMsg = messages.value[messages.value.length - 1]
-  if (lastMsg && lastMsg.role === 'assistant') {
-    markRawContent(lastMsg)
-  }
-}
-
-function markRawContent(msg: ChatMessage) {
-  const extended = msg as ChatMessage & { _rawContent?: string }
-  if (extended._rawContent === undefined) {
-    extended._rawContent = msg.content
+async function trackBehavior(action: string, detail: Record<string, unknown> = {}) {
+  if (!sessionId.value) return
+  try {
+    await fetch('/api/evaluation/track-behavior', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: sessionId.value,
+        action,
+        detail,
+        duration_minutes: 0,
+      }),
+    })
+  } catch {
+    /* 静默失败 */
   }
 }
 
 function getRawContent(msg: ChatMessage): string {
-  return (msg as ChatMessage & { _rawContent?: string })._rawContent ?? msg.content
+  return msg.content
 }
 
 function renderMarkdown(text: string): string {
@@ -135,6 +108,7 @@ async function sendMessage() {
   
   error.value = ''
   loading.value = true
+  streaming.value = true
   
   const userMsg: ChatMessage = {
     role: 'user',
@@ -156,7 +130,7 @@ async function sendMessage() {
   scrollToBottom()
   
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -165,19 +139,58 @@ async function sendMessage() {
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    const reply: string = data.reply ?? ''
-    if (data.session_id) sessionId.value = data.session_id
+    if (!res.body) throw new Error('响应体为空')
     
-    markRawContent(aiMsg)
-    await startTypewriter(reply)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const data = JSON.parse(line.slice(6))
+          
+          if (data.type === 'node_complete' && data.content) {
+            if (aiMsg.content) {
+              aiMsg.content += '\n\n' + data.content
+            } else {
+              aiMsg.content = data.content
+            }
+            await nextTick()
+            scrollToBottom()
+          }
+          
+          if (data.type === 'done') {
+            if (data.session_id) sessionId.value = data.session_id
+          }
+          
+          if (data.type === 'error') {
+            error.value = data.message || '工作流执行失败'
+          }
+        } catch {
+          // 跳过无法解析的行
+        }
+      }
+    }
   } catch (e) {
-    aiMsg.content = '请求失败，请稍后重试。'
+    if (!aiMsg.content) {
+      aiMsg.content = '请求失败，请稍后重试。'
+    }
     error.value = e instanceof Error ? e.message : '请求失败'
   } finally {
     loading.value = false
+    streaming.value = false
     await nextTick()
     scrollToBottom()
+    trackBehavior('chat', { message_length: sentMessage.length })
   }
 }
 
@@ -195,6 +208,7 @@ async function regenerateMessage(msgIndex: number) {
   
   error.value = ''
   loading.value = true
+  streaming.value = true
   
   const newAiMsg: ChatMessage = {
     role: 'assistant',
@@ -207,7 +221,7 @@ async function regenerateMessage(msgIndex: number) {
   scrollToBottom()
   
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -216,17 +230,55 @@ async function regenerateMessage(msgIndex: number) {
       }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
-    const reply: string = data.reply ?? ''
-    if (data.session_id) sessionId.value = data.session_id
+    if (!res.body) throw new Error('响应体为空')
     
-    markRawContent(newAiMsg)
-    await startTypewriter(reply)
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        try {
+          const data = JSON.parse(line.slice(6))
+          
+          if (data.type === 'node_complete' && data.content) {
+            if (newAiMsg.content) {
+              newAiMsg.content += '\n\n' + data.content
+            } else {
+              newAiMsg.content = data.content
+            }
+            await nextTick()
+            scrollToBottom()
+          }
+          
+          if (data.type === 'done') {
+            if (data.session_id) sessionId.value = data.session_id
+          }
+          
+          if (data.type === 'error') {
+            error.value = data.message || '工作流执行失败'
+          }
+        } catch {
+          // 跳过无法解析的行
+        }
+      }
+    }
   } catch (e) {
-    newAiMsg.content = '重新生成失败，请稍后重试。'
+    if (!newAiMsg.content) {
+      newAiMsg.content = '重新生成失败，请稍后重试。'
+    }
     error.value = e instanceof Error ? e.message : '重新生成失败'
   } finally {
     loading.value = false
+    streaming.value = false
     await nextTick()
     scrollToBottom()
   }
@@ -258,10 +310,10 @@ function copyCodeBlock(code: string) {
 }
 
 function clearChat() {
-  stopTypewriter()
   messages.value = []
   sessionId.value = ''
   error.value = ''
+  streaming.value = false
 }
 
 function scrollToBottom() {
@@ -303,7 +355,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  stopTypewriter()
+  // SSE 连接会在组件卸载时随 fetch 中断自动清理
 })
 </script>
 

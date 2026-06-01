@@ -17,15 +17,19 @@
 | 六、LangGraph工作流 | ✅ | 多智能体协同编排、知识拆解、答疑辅导、安全审核、学习评估 |
 | 七、讯飞语音接入 | ✅ | ASR语音识别、TTS语音合成、语音服务封装、语音API路由 |
 | 八、学习评估闭环 | ✅ | 学习行为采集、评估指标计算、评估报告生成、画像动态更新 |
-| 九、前端UI优化 | ✅ | 对话学习、个性化学习中心、资源生成、学习评估、语音学习五大模块 |
+| 九、前端UI优化 | ✅ | 对话学习、个性化学习中心、资源生成、学习评估、语音学习、结果展示、视频播放 |
 | 十、Docker部署 | ✅ | Docker Compose编排、一键启动脚本、多服务协同 |
 
 ## 核心特性
 
 - **11个智能体协同**：画像、规划、知识拆解、PPT/题库/代码/思维导图/视频生成、答疑、安全审核、评估
 - **学习闭环回流**：评估得分不达标时自动回流重新规划（最多2次），实现动态学习路径调整
+- **个性化学习路径**：根据画像生成周计划、知识点推荐、资源匹配、方案建议
+- **智能资源推荐**：基于学习风格和目标自动推荐最优资源组合
 - **资源持久化**：生成的学习资源自动保存到数据库，支持历史查询
+- **AI视频生成**：视频脚本自动生成 + 讯飞TTS旁白合成 + 场景动画播放
 - **Mermaid可视化**：思维导图资源自动渲染为交互式SVG图表
+- **评估结果展示**：雷达图、环形进度条、柱状图等可视化评估报告
 - **完整工作流API**：支持一键执行全流程（画像→规划→资源生成→评估）
 - **讯飞语音集成**：ASR语音识别 + TTS语音合成
 - **规则引擎兜底**：未配置星火API时，所有Agent通过启发式规则引擎正常工作
@@ -35,12 +39,15 @@
 ```
 EduAgent/
 ├── frontend/              # Vue3 + Tailwind + Mermaid
+│   └── src/components/    # ChatLearning, PersonalizedLearning, ResourceGenerator,
+│                          # EvaluationCenter, VoiceLearning, ResultDisplay, VideoPlayer
 ├── backend/               # FastAPI 入口、settings、core、integrations/{spark,asr,tts}
-├── api/routes/            # health, chat, rag, profile, voice, evaluation, workflow, resources, progress
+├── api/routes/            # health, chat, rag, profile, voice, evaluation, workflow,
+│                          # resources, progress, learning_path, recommend, video
 ├── agents/                # 11个多智能体（画像、规划、知识、PPT、题库、代码、思维导图、视频、答疑、安全、评估）
 ├── workflows/             # LangGraph 工作流编排（含闭环回流机制）
 ├── rag/                   # 解析 / 切片 / 向量库 / 检索
-├── services/              # 业务服务（profile_service, voice_service, evaluation_service）
+├── services/              # 业务服务（profile, voice, evaluation, learning_path, recommendation）
 ├── schemas/               # Pydantic 模型
 ├── knowledge/             # 课程资料（示例 Markdown 已含）
 ├── prompts/               # Prompt 模板
@@ -110,6 +117,10 @@ npm run dev
 | POST | `/api/evaluation/report` | 生成评估报告 |
 | POST | `/api/evaluation/behavior` | 提交学习行为 |
 | GET | `/api/evaluation/metrics` | 评估指标说明 |
+| POST | `/api/learning-path/generate` | 生成个性化学习路径（含资源匹配） |
+| GET | `/api/learning-path/{session_id}` | 查询学习路径及推荐资源 |
+| GET | `/api/recommend/{session_id}` | 智能资源推荐（基于画像风格+目标） |
+| POST | `/api/video/generate` | AI视频生成（脚本+TTS音频合成） |
 | POST | `/api/voice/asr` | 语音识别 |
 | POST | `/api/voice/tts` | 语音合成 |
 

@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import chat, evaluation, health, profile, progress, rag, resources, voice, workflow
+from api.routes import chat, evaluation, health, learning_path, profile, progress, rag, recommend, resources, video, voice, workflow
 from backend.core.logging_config import setup_logging
 from backend.core.redis_client import get_redis
 from backend.settings import get_settings
@@ -45,7 +45,7 @@ settings = get_settings()
 
 app = FastAPI(
     title="EduAgent API",
-    version="0.2.0",
+    version="0.3.0",
     description="多智能体高校个性化学习平台后端（阶段一～十）",
     lifespan=lifespan,
 )
@@ -62,8 +62,11 @@ app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(rag.router)
 app.include_router(profile.router)
+app.include_router(learning_path.router)
 app.include_router(voice.router)
 app.include_router(evaluation.router)
 app.include_router(resources.router)
+app.include_router(video.router)
 app.include_router(progress.router)
+app.include_router(recommend.router)
 app.include_router(workflow.router)

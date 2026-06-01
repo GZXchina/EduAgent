@@ -552,3 +552,104 @@ Linux/macOS:
 2. 访问 http://localhost:8080 能看到前端页面
 3. 访问 http://localhost:8000/docs 能看到API文档
 4. 运行停止脚本后服务正常停止
+
+---
+
+## 补充功能：学习路径与智能推荐
+
+| 能力 | 路径 |
+|------|------|
+| 学习路径服务 | `services/learning_path_service.py` |
+| 资源推荐服务 | `services/recommendation_service.py` |
+| 学习路径路由 | `api/routes/learning_path.py` |
+| 推荐路由 | `api/routes/recommend.py` |
+
+**学习路径服务**：
+- 根据学生画像和知识水平自动生成周计划学习路径
+- 每个学习步骤自动匹配推荐资源类型（PPT/题库/代码/思维导图/视频）
+- 从数据库中检索已生成资源，关联到对应学习步骤
+- 支持多种学习目标：蓝桥杯、考研、就业、通用学习
+
+**资源推荐服务**：
+- 基于学习风格（视觉/听觉/阅读/动手）推荐适配资源
+- 基于学习目标优先级推荐核心资源
+- 根据知识水平调整推荐相关性评分
+- 输出带理由的结构化推荐列表
+
+**API端点**：
+- `POST /api/learning-path/generate` - 生成个性化学习路径（含资源匹配）
+- `GET /api/learning-path/{session_id}` - 查询学习路径及推荐资源
+- `GET /api/recommend/{session_id}` - 智能资源推荐（基于画像风格+目标）
+
+**验收**：
+
+```bash
+# 先生成画像
+curl -X POST http://127.0.0.1:8000/api/profile/analyze \
+  -H "Content-Type: application/json" \
+  -d "{\"message\":\"我是计算机专业大一学生，想备战蓝桥杯，基础一般，喜欢看图解，每天1小时\"}"
+
+# 生成学习路径
+curl -X POST http://127.0.0.1:8000/api/learning-path/generate \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\":\"<session_id>\"}"
+
+# 获取智能推荐
+curl http://127.0.0.1:8000/api/recommend/<session_id>
+```
+
+---
+
+## 补充功能：AI视频生成
+
+| 能力 | 路径 |
+|------|------|
+| 视频脚本Agent | `agents/video_agent.py` |
+| 视频路由 | `api/routes/video.py` |
+| 视频播放器 | `frontend/src/components/VideoPlayer.vue` |
+
+**核心功能**：
+- 根据学习主题自动生成教学视频脚本（场景分解、讲解内容、视觉描述）
+- 集成讯飞TTS为每个场景合成旁白音频
+- 前端VideoPlayer组件：场景卡片动画切换、同步TTS播放、Canvas录制导出
+
+**API端点**：
+- `POST /api/video/generate` - AI视频生成（脚本+TTS音频合成）
+
+**VideoPlayer组件特性**：
+- 场景卡片滑动/淡入动画切换
+- TTS音频同步播放（逐场景自动推进）
+- Canvas录制导出WebM视频
+- 播放控制：播放/暂停、上一页/下一页、进度条
+
+**验收**：
+
+```bash
+# 生成视频（含TTS音频）
+curl -X POST http://127.0.0.1:8000/api/video/generate \
+  -H "Content-Type: application/json" \
+  -d "{\"topic\":\"Python循环语句\",\"tts_voice\":\"xiaoyan\"}"
+```
+
+---
+
+## 补充功能：前端可视化增强
+
+| 能力 | 路径 |
+|------|------|
+| 评估结果展示 | `frontend/src/components/ResultDisplay.vue` |
+| 视频播放器 | `frontend/src/components/VideoPlayer.vue` |
+
+**ResultDisplay 组件**：
+- SVG环形进度条：总评分数 + 等级
+- SVG雷达图：4维评估指标（正确率/掌握度/利用率/投入度）
+- 知识掌握度柱状图
+- 优势/薄弱/建议三栏信息
+- 学习行为摘要卡片
+- 导出按钮（JSON / Markdown）
+
+**VideoPlayer 组件**：
+- 场景卡片动画切换（滑动/淡入效果）
+- 同步TTS音频旁白播放（逐场景自动推进）
+- Canvas录制导出视频（MediaRecorder + WebM）
+- 播放控制、进度条、浅色主题适配
