@@ -23,84 +23,69 @@ def load_ppt_prompt() -> str:
 
 
 def heuristic_ppt(topic: str, profile: StudentProfile | None = None) -> PPTDeck:
-    """星火未配置时的规则兜底PPT生成。"""
+    """星火未配置时的规则兜底PPT生成。通用模板，围绕任意学科主题。"""
     level = profile.knowledge_level if profile else "beginner"
     style = profile.learning_style if profile else "reading"
 
-    slide_count = 8 if level == "beginner" else 6
-
-    slides = []
-    if "循环" in topic or "loop" in topic.lower():
-        slides = _generate_loop_ppt(style)
-    elif "函数" in topic or "function" in topic.lower():
-        slides = _generate_function_ppt(style)
-    elif "面向对象" in topic or "oop" in topic.lower():
-        slides = _generate_oop_ppt(style)
-    else:
-        slides = _generate_generic_ppt(topic, style, slide_count)
+    slides = _generate_generic_ppt(topic, style, level)
 
     return PPTDeck(
         topic=topic,
         total_slides=len(slides),
         slides=slides,
-        source="heuristic"
+        source="heuristic",
     )
 
 
-def _generate_loop_ppt(style: str) -> list[PPTSlide]:
-    resources = ["图解教程", "动画演示"] if style == "visual" else ["文档教程", "代码练习"]
-    return [
-        PPTSlide(slide_number=1, title="循环结构概述", content=["循环的概念与作用", "循环的应用场景", "循环的优点"], notes="先讲清为什么需要循环"),
-        PPTSlide(slide_number=2, title="for循环", content=["for循环语法", "range函数的使用", "遍历列表"], notes="配合代码演示"),
-        PPTSlide(slide_number=3, title="while循环", content=["while循环语法", "条件控制", "无限循环的避免"], notes="强调条件判断"),
-        PPTSlide(slide_number=4, title="循环嵌套", content=["嵌套循环的概念", "九九乘法表", "打印图案"], notes="逐步演示"),
-        PPTSlide(slide_number=5, title="break与continue", content=["break退出循环", "continue跳过本次", "区别与使用场景"], notes="对比讲解"),
-        PPTSlide(slide_number=6, title="循环经典案例", content=["斐波那契数列", "质数判断", "算法优化"], notes="综合应用"),
-        PPTSlide(slide_number=7, title="常见错误与调试", content=["索引越界", "死循环", "缩进错误"], notes="实操演示"),
-        PPTSlide(slide_number=8, title="练习与小结", content=["上机练习", "知识点回顾", "作业布置"], notes="巩固练习"),
-    ]
+def _generate_generic_ppt(topic: str, style: str, level: str) -> list[PPTSlide]:
+    """通用PPT生成，按知识水平调整深度，适用于任意学科。"""
+    # 根据水平决定页数和内容深度
+    if level == "advanced":
+        phases = [
+            (f"{topic}前沿概述", ["研究背景", "最新进展", "开放问题"]),
+            (f"{topic}核心理论", ["理论框架", "数学/逻辑推导", "关键定理"]),
+            (f"{topic}高级方法", ["高级技术", "优化策略", "对比分析"]),
+            (f"{topic}实践案例", ["工业级案例", "性能评估", "最佳实践"]),
+            (f"{topic}前沿探索", ["学术论文解读", "研究方向", "创新思路"]),
+            ("总结与展望", ["成果总结", "未来趋势", "参考文献"]),
+        ]
+    elif level == "intermediate":
+        phases = [
+            (f"{topic}概述", ["核心概念回顾", "学习目标", "知识框架"]),
+            (f"{topic}深入理解", ["进阶知识点", "底层原理", "实现细节"]),
+            (f"{topic}实际应用", ["典型场景", "案例分析", "问题解决"]),
+            (f"{topic}进阶技巧", ["常见误区", "优化方法", "最佳实践"]),
+            (f"{topic}综合项目", ["项目设计", "分步实现", "成果展示"]),
+            ("总结与练习", ["知识回顾", "练习题", "拓展学习"]),
+        ]
+    else:
+        phases = [
+            (f"{topic}概述", ["概念介绍", "学习意义", "知识框架"]),
+            (f"{topic}基础知识", ["核心术语", "基本原理", "入门工具"]),
+            (f"{topic}基本操作", ["基础使用方法", "简单示例", "步骤演示"]),
+            (f"{topic}常见应用", ["应用场景", "实际案例", "动手练习"]),
+            (f"{topic}常见问题", ["常见错误", "排查方法", "注意事项"]),
+            (f"{topic}进阶引导", ["进阶方向", "推荐资源", "下一步学习"]),
+            ("总结与练习", ["知识点回顾", "练习题", "作业布置"]),
+        ]
 
+    # 根据学习风格调整备注
+    notes_map = {
+        "visual": "配合图解和思维导图展示",
+        "auditory": "重点口头讲解，配合音频说明",
+        "reading": "提供详细文档和阅读材料",
+        "kinesthetic": "配合动手实践和案例操作",
+    }
+    base_note = notes_map.get(style, "结合讲解与示例")
 
-def _generate_function_ppt(style: str) -> list[PPTSlide]:
-    return [
-        PPTSlide(slide_number=1, title="函数基础", content=["函数的概念", "函数的定义与调用", "函数的好处"], notes="从概念入手"),
-        PPTSlide(slide_number=2, title="函数参数", content=["位置参数", "关键字参数", "默认参数"], notes="区分参数类型"),
-        PPTSlide(slide_number=3, title="返回值", content=["return语句", "返回多个值", "返回None的情况"], notes="实际案例"),
-        PPTSlide(slide_number=4, title="变量作用域", content=["局部变量", "全局变量", "global关键字"], notes="重点讲解"),
-        PPTSlide(slide_number=5, title="匿名函数", content=["lambda表达式", "map/filter配合", "lambda适用场景"], notes="简化代码"),
-        PPTSlide(slide_number=6, title="递归函数", content=["递归的概念", "递归调用过程", "递归终止条件"], notes="画图演示"),
-        PPTSlide(slide_number=7, title="函数模块", content=["模块导入", "标准库", "自定义模块"], notes="实战应用"),
-        PPTSlide(slide_number=8, title="练习与总结", content=["编写函数", "调试技巧", "本章小结"], notes="综合练习"),
-    ]
-
-
-def _generate_oop_ppt(style: str) -> list[PPTSlide]:
-    return [
-        PPTSlide(slide_number=1, title="面向对象概述", content=["OOP概念", "类与对象", "面向过程vs面向对象"], notes="对比讲解"),
-        PPTSlide(slide_number=2, title="类的定义", content=["class关键字", "__init__方法", "self参数"], notes="代码演示"),
-        PPTSlide(slide_number=3, title="属性与方法", content=["实例属性", "类属性", "实例方法"], notes="区分概念"),
-        PPTSlide(slide_number=4, title="继承", content=["单继承", "多继承", "super()函数"], notes="重点内容"),
-        PPTSlide(slide_number=5, title="多态与封装", content=["多态概念", "封装原则", "私有属性"], notes="实际应用"),
-        PPTSlide(slide_number=6, title="特殊方法", content=["__str__", "__len__", "运算符重载"], notes="拓展内容"),
-        PPTSlide(slide_number=7, title="设计模式入门", content=["单例模式", "工厂模式", "实际应用"], notes="进阶内容"),
-        PPTSlide(slide_number=8, title="项目实战", content=["需求分析", "类设计", "代码实现"], notes="综合项目"),
-    ]
-
-
-def _generate_generic_ppt(topic: str, style: str, count: int) -> list[PPTSlide]:
     slides = []
-    for i in range(1, count + 1):
-        if i == 1:
-            title = f"{topic}概述"
-            content = ["概念介绍", "学习目标", "知识框架"]
-        elif i == count:
-            title = "总结与练习"
-            content = ["知识点回顾", "练习题", "拓展学习"]
-        else:
-            title = f"{topic}第{i}部分"
-            content = [f"核心内容{i-1}", "代码示例", "练习实践"]
-
-        slides.append(PPTSlide(slide_number=i, title=title, content=content))
+    for i, (title, content) in enumerate(phases, 1):
+        slides.append(PPTSlide(
+            slide_number=i,
+            title=title,
+            content=content,
+            notes=base_note if i > 1 else "开场引导，吸引注意力",
+        ))
     return slides
 
 
@@ -130,10 +115,21 @@ class PPTAgent(BaseAgent):
     def _extract_topic(self, state: dict[str, Any]) -> str:
         if state.get("learning_path"):
             lp = LearningPath(**state["learning_path"])
-            return lp.path_name
+            if lp.path_name and lp.path_name != "unknown":
+                return lp.path_name
         if state.get("knowledge_tree"):
-            return state.get("knowledge_tree", {}).get("topic", "Python学习")
-        return state.get("user_input", "Python基础")
+            kt_topic = state["knowledge_tree"].get("topic", "")
+            if kt_topic:
+                return kt_topic
+        profile_data = state.get("student_profile", {})
+        if profile_data:
+            p = StudentProfile(**profile_data)
+            if p.learning_goal_text and p.learning_goal_text not in ("unknown", ""):
+                return p.learning_goal_text[:30]
+            if p.major and p.major not in ("", "unknown"):
+                return p.major
+        user_input = state.get("user_input", "")
+        return user_input[:30] if user_input else "通用学习"
 
     async def _generate_ppt(self, topic: str, profile: StudentProfile | None) -> tuple[PPTDeck, str]:
         if self.spark.configured:

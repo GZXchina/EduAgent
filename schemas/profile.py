@@ -263,9 +263,20 @@ class MindMap(BaseModel):
         lines.append(self._node_to_mermaid(self.root, 0))
         return "\n".join(lines)
 
+    @staticmethod
+    def _sanitize_mermaid_text(text: str) -> str:
+        """清理 Mermaid mindmap 节点文本，避免特殊字符破坏语法。"""
+        import re
+        # 移除 Mermaid 保留字符：()[]{};#
+        cleaned = re.sub(r'[()[\]{};#]', '', text)
+        # 移除首尾空白
+        cleaned = cleaned.strip()
+        return cleaned or "节点"
+
     def _node_to_mermaid(self, node: MindMapNode, depth: int) -> str:
-        indent = "  " * depth
-        result = [f"{indent}  {node.text}"]
+        indent = "  " * (depth + 1)
+        safe_text = self._sanitize_mermaid_text(node.text)
+        result = [f"{indent}{safe_text}"]
         for child in node.children:
             result.append(self._node_to_mermaid(child, depth + 1))
         return "\n".join(result)

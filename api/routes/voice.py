@@ -10,7 +10,7 @@ from fastapi.responses import Response
 from services.voice_service import get_voice_service
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/voice", tags=["voice"])
+router = APIRouter(prefix="/api/voice", tags=["voice"])
 
 _voice = get_voice_service()
 
@@ -41,6 +41,10 @@ async def tts_endpoint(
     """语音合成：接收文字，返回音频数据。"""
     try:
         audio_data = await _voice.text_to_speech(text, voice)
+        if not audio_data:
+            logger.warning("TTS返回空数据: text=%s, voice=%s", text[:30], voice)
+            raise HTTPException(status_code=503, detail="TTS未返回音频数据")
+        logger.info("TTS合成成功: text=%s, voice=%s, size=%d bytes", text[:30], voice, len(audio_data))
         return Response(
             content=audio_data,
             media_type="audio/mpeg",

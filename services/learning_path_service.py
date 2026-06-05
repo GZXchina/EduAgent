@@ -11,34 +11,35 @@ from schemas.profile import LearningPath, LearningStep, StudentProfile
 
 logger = logging.getLogger(__name__)
 
-TOPIC_RESOURCE_MAP: dict[str, list[str]] = {
-    "Python环境搭建": ["ppt", "video"],
-    "变量与数据类型": ["ppt", "quiz", "code"],
-    "基本输入输出": ["code", "quiz"],
-    "条件语句": ["code", "quiz"],
-    "循环结构": ["code", "quiz", "mindmap"],
-    "函数定义与调用": ["ppt", "code", "quiz"],
-    "列表与字典": ["code", "quiz", "mindmap"],
-    "字符串操作": ["code", "quiz"],
-    "文件操作": ["code", "ppt"],
-    "异常处理": ["code", "quiz"],
-    "面向对象编程": ["ppt", "code", "mindmap"],
-    "模块与包": ["ppt", "code"],
-    "装饰器": ["code", "ppt"],
-    "生成器与迭代器": ["code", "mindmap"],
-    "lambda表达式": ["code", "quiz"],
-    "标准库使用": ["code", "ppt"],
-    "正则表达式": ["code", "quiz"],
-    "JSON处理": ["code", "ppt"],
-    "算法基础": ["ppt", "mindmap", "quiz"],
-    "数据结构": ["ppt", "mindmap", "code"],
-    "时间复杂度分析": ["ppt", "quiz"],
-    "递归": ["code", "mindmap"],
-    "动态规划入门": ["code", "quiz"],
-    "图论基础": ["ppt", "mindmap"],
-    "蓝桥杯真题": ["quiz", "code"],
-    "模拟比赛": ["quiz", "code"],
+# 通用资源类型推荐策略：根据学习步骤的位置和内容特征推荐资源类型
+# 不再硬编码特定学科主题，而是通过步骤位置和关键词匹配
+_STAGE_RESOURCE_MAP: dict[str, list[str]] = {
+    "入门": ["ppt", "video", "mindmap"],
+    "概述": ["ppt", "video", "mindmap"],
+    "基础": ["ppt", "quiz", "mindmap"],
+    "概念": ["ppt", "mindmap", "video"],
+    "操作": ["code", "quiz"],
+    "实践": ["code", "quiz", "video"],
+    "应用": ["code", "quiz", "ppt"],
+    "进阶": ["ppt", "code", "mindmap"],
+    "深入": ["ppt", "code", "quiz"],
+    "高级": ["code", "ppt", "mindmap"],
+    "项目": ["code", "ppt", "video"],
+    "综合": ["ppt", "quiz", "code", "mindmap"],
+    "评估": ["quiz", "code"],
+    "冲刺": ["quiz", "code"],
+    "真题": ["quiz", "code"],
+    "模拟": ["quiz", "code"],
+    "面试": ["quiz", "ppt"],
 }
+# 默认推荐：所有资源类型轮转
+_DEFAULT_RESOURCE_TYPES: list[list[str]] = [
+    ["ppt", "mindmap"],
+    ["code", "quiz"],
+    ["video", "ppt"],
+    ["mindmap", "code"],
+    ["quiz", "video"],
+]
 
 RESOURCE_LABELS: dict[str, str] = {
     "ppt": "PPT课件",
@@ -105,7 +106,28 @@ class LearningPathService:
                             step_resources.append(resource)
 
             if not step_resources:
-                for resource_type in TOPIC_RESOURCE_MAP.get(step.topics[0] if step.topics else "", []):
+                # 通用推荐：根据步骤标题关键词匹配资源类型
+                recommended_types: list[str] = []
+                step_text = step.title + " ".join(step.topics)
+                for keyword, types in _STAGE_RESOURCE_MAP.items():
+                    if keyword in step_text:
+                        recommended_types.extend(types)
+                        break
+
+                # 如果标题没有匹配任何关键词，按步骤位置轮转推荐
+                if not recommended_types:
+                    idx = (step.week - 1) % len(_DEFAULT_RESOURCE_TYPES)
+                    recommended_types = _DEFAULT_RESOURCE_TYPES[idx]
+
+                # 去重并保留顺序
+                seen: set[str] = set()
+                unique_types: list[str] = []
+                for rt in recommended_types:
+                    if rt not in seen:
+                        seen.add(rt)
+                        unique_types.append(rt)
+
+                for resource_type in unique_types:
                     for resource in resources:
                         if resource["resource_type"] == resource_type:
                             if resource["id"] not in [r["id"] for r in step_resources]:

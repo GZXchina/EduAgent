@@ -50,9 +50,17 @@ def build_simple_workflow():
     return g.compile()
 
 
-def default_initial_state(user_input: str, session_id: str | None = None) -> AgentState:
+def default_initial_state(
+    user_input: str,
+    session_id: str | None = None,
+    history: list[dict[str, str]] | None = None,
+) -> AgentState:
+    messages: list[dict[str, Any]] = []
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_input})
     return {
         "user_input": user_input,
         "session_id": session_id,
-        "messages": [{"role": "user", "content": user_input}],
+        "messages": messages,
     }

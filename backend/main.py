@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import chat, evaluation, health, learning_path, profile, progress, rag, recommend, resources, video, voice, workflow
+from api.routes import auth, chat, custom_models, evaluation, health, learning_path, profile, progress, rag, recommend, resource_generate, resources, video, voice, workflow
 from backend.core.logging_config import setup_logging
 from backend.core.redis_client import get_redis
 from backend.settings import get_settings
@@ -28,6 +28,9 @@ async def lifespan(app: FastAPI):
 
     init_db()
     get_redis()
+
+    from backend.core.auth import ensure_default_admin
+    ensure_default_admin()
 
     if settings.auto_ingest_on_startup:
         try:
@@ -59,13 +62,16 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(auth.router)
 app.include_router(chat.router)
+app.include_router(custom_models.router)
 app.include_router(rag.router)
 app.include_router(profile.router)
 app.include_router(learning_path.router)
 app.include_router(voice.router)
 app.include_router(evaluation.router)
 app.include_router(resources.router)
+app.include_router(resource_generate.router)
 app.include_router(video.router)
 app.include_router(progress.router)
 app.include_router(recommend.router)

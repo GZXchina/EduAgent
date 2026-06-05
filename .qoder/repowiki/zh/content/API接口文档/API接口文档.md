@@ -354,10 +354,46 @@ M --> RW["api/routes/workflow.py"]
 - [backend/main.py:46-51](file://backend/main.py#L46-L51)
 
 ### 认证与限流
-- 认证：当前路由未强制实现认证中间件
+- 认证：已实现 JWT Bearer Token 认证（HS256），通过 `Authorization: Bearer <token>` 请求头传递
 - 限流：未内置限流策略，建议在网关或中间件层添加
 
-[本节为通用建议，无需特定文件引用]
+### 认证接口（/api/auth）
+
+| 方法 | 路径 | 说明 | 权限 |
+|------|------|------|------|
+| POST | `/api/auth/login` | 用户登录，返回 JWT | 公开 |
+| POST | `/api/auth/register` | 用户注册 | 公开 |
+| GET | `/api/auth/me` | 获取当前用户信息 | 需登录 |
+| GET | `/api/auth/users` | 用户列表 | 管理员 |
+| PUT | `/api/auth/users/{id}/role` | 修改用户角色 | 管理员 |
+| DELETE | `/api/auth/users/{id}` | 禁用用户（软删除） | 管理员 |
+
+#### 登录请求示例
+
+```json
+POST /api/auth/login
+{
+  "username": "admin",
+  "password": "admin123"
+}
+```
+
+响应：
+```json
+{
+  "access_token": "eyJhbGciOi...",
+  "token_type": "bearer",
+  "user": {
+    "id": 1,
+    "username": "admin",
+    "display_name": "管理员",
+    "role": "admin"
+  }
+}
+```
+
+- [api/routes/auth.py](file://api/routes/auth.py)
+- [backend/core/auth.py](file://backend/core/auth.py)
 
 ### 错误处理机制
 - 统一返回结构：成功返回 2xx；异常返回 4xx/5xx，包含明确错误信息

@@ -30,48 +30,96 @@ def load_profile_prompt() -> str:
 
 
 def heuristic_profile(text: str) -> StudentProfile:
-    """星火未配置时的规则兜底，便于本地开发与演示。"""
-    t = text.lower()
+    """星火未配置时的规则兜底，便于本地开发与演示。
+    通用化设计，不绑定特定学科/编程语言。
+    """
     level = "beginner"
-    if any(w in text for w in ("熟练", "进阶", "高级", "有经验")):
+    if any(w in text for w in ("熟练", "进阶", "高级", "有经验", "精通")):
         level = "advanced"
-    elif any(w in text for w in ("学过", "基础", "中等", "中级")):
+    elif any(w in text for w in ("学过", "基础", "中等", "中级", "有一定基础")):
         level = "intermediate"
 
     style = "reading"
-    if any(w in text for w in ("图解", "图像", "看图", "视觉")):
+    if any(w in text for w in ("图解", "图像", "看图", "视觉", "思维导图")):
         style = "visual"
-    elif any(w in text for w in ("听讲", "音频", "听课")):
+    elif any(w in text for w in ("听讲", "音频", "听课", "讲解")):
         style = "auditory"
-    elif any(w in text for w in ("动手", "实践", "实验")):
+    elif any(w in text for w in ("动手", "实践", "实验", "实操", "项目")):
         style = "kinesthetic"
 
     goal = "general_learning"
-    if "蓝桥" in text:
+    if any(w in text for w in ("蓝桥", "竞赛", "比赛", "ACM")):
         goal = "lanqiao_competition"
-    elif any(w in text for w in ("考研", "研究生")):
+    elif any(w in text for w in ("考研", "研究生", "初试", "复试")):
         goal = "postgraduate_exam"
-    elif any(w in text for w in ("就业", "求职", "面试")):
+    elif any(w in text for w in ("就业", "求职", "面试", "找工作", "实习")):
         goal = "job_preparation"
+    elif any(w in text for w in ("证书", "考试", "认证", "资格证")):
+        goal = "certification"
+    elif any(w in text for w in ("研究", "论文", "学术")):
+        goal = "research"
 
+    # 通用薄弱点提取：从用户输入中识别"不会/不懂/薄弱/难"等关键词后面的内容
     weakness = ""
-    for kw in ("循环", "函数", "面向对象", "指针", "递归", "数组"):
-        if kw in text:
-            weakness = kw
+    weakness_patterns = [
+        r"不会[的是]?(.{2,6})",
+        r"不懂[的是]?(.{2,6})",
+        r"薄弱[点是]?(.{2,6})",
+        r"难[以的点]?[的是]?(.{2,6})",
+        r"掌握不好[的是]?(.{2,6})",
+    ]
+    for pattern in weakness_patterns:
+        m = re.search(pattern, text)
+        if m:
+            weakness = m.group(1).strip().rstrip("，。,. ")
             break
+    # 回退：常见学科关键词（通用列表，不局限于编程）
+    if not weakness:
+        common_keywords = [
+            "循环", "函数", "面向对象", "指针", "递归", "数组",
+            "微积分", "线性代数", "概率", "统计",
+            "语法", "写作", "阅读理解", "听力",
+            "有机化学", "无机化学", "物理", "力学",
+            "数据结构", "算法", "操作系统", "网络",
+        ]
+        for kw in common_keywords:
+            if kw in text:
+                weakness = kw
+                break
 
+    # 学习时间提取（通用模式）
     study_time = "unknown"
-    m = re.search(r"每天\s*(\d+)\s*小时", text)
+    m = re.search(r"每天\s*(\d+)\s*[小时h]", text)
     if m:
         study_time = f"{m.group(1)}h/day"
-    elif "1小时" in text or "一小时" in text:
+    elif re.search(r"每周\s*(\d+)\s*[小时h]", text):
+        m2 = re.search(r"每周\s*(\d+)\s*[小时h]", text)
+        if m2:
+            weekly = int(m2.group(1))
+            study_time = f"{max(1, weekly // 7)}h/day"
+    elif any(w in text for w in ("1小时", "一小时", "一小时左右")):
         study_time = "1h/day"
+    elif any(w in text for w in ("2小时", "两小时", "两个小时")):
+        study_time = "2h/day"
 
+    # 通用专业/学科提取：从用户输入中识别专业名称
     major = ""
-    if "计算机" in text:
-        major = "计算机科学"
-    elif "软件" in text:
-        major = "软件工程"
+    major_patterns = [
+        r"专业[是为]?([\u4e00-\u9fa5]{2,8})",
+        r"学[的是习]([\u4e00-\u9fa5]{2,8})",
+        r"([\u4e00-\u9fa5]{2,6})专业",
+    ]
+    for pattern in major_patterns:
+        m = re.search(pattern, text)
+        if m:
+            candidate = m.group(1).strip()
+            # 过滤掉过于通用的词
+            if candidate not in ("好", "的", "很", "一些", "什么", "很多"):
+                major = candidate
+                break
+
+    # 如果专业字段为空，尝试从学习目标中提取主题
+    learning_goal_text = text[:200]
 
     return StudentProfile(
         knowledge_level=level,
@@ -80,7 +128,7 @@ def heuristic_profile(text: str) -> StudentProfile:
         goal=goal,
         study_time=study_time,
         major=major,
-        learning_goal_text=text[:200],
+        learning_goal_text=learning_goal_text,
         learning_base="初学" if level == "beginner" else "有基础",
         learning_style_text=style,
         raw_input=text,

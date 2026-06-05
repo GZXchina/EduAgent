@@ -1,7 +1,5 @@
 # EduAgent —— 基于讯飞星火与多智能体协同的高校个性化学习平台
 
-## 推荐工程目录
-
 ```text
 EduAgent/
 ├── frontend/                  # Vue3前端
@@ -344,20 +342,21 @@ flowchart LR
 
 # 九、推荐技术架构
 
-| 模块      | 技术方案                            |
-| ------- | ------------------------------- |
-| 前端      | Vue3 + TypeScript + TailwindCSS |
-| 后端      | FastAPI                         |
-| Agent框架 | LangGraph                       |
-| RAG框架   | LangChain                       |
-| 向量数据库   | ChromaDB                        |
-| 主大模型    | 讯飞星火 Spark                      |
-| 语音识别    | 讯飞ASR                           |
-| 语音合成    | 讯飞TTS                           |
-| 图表可视化   | ECharts                         |
-| 数据库     | PostgreSQL                      |
-| 缓存      | Redis                           |
-| 部署方案    | Docker                          |
+| 模块          | 技术方案                            |
+| ----------- | ------------------------------- |
+| 前端          | Vue3 + TypeScript + TailwindCSS |
+| 后端          | FastAPI                         |
+| Agent框架     | LangGraph                       |
+| RAG框架       | LangChain                       |
+| 向量数据库       | ChromaDB                        |
+| Embedding模型 | BGE-small-zh-v1.5               |
+| 主大模型        | 讯飞星火 Spark (WebSocket / HTTP)   |
+| 语音识别        | 讯飞ASR (WebSocket)               |
+| 语音合成        | 讯飞TTS (WebSocket)               |
+| 图表可视化       | SVG (雷达图/环形进度条) + Mermaid       |
+| 数据库         | SQLite (开发) / PostgreSQL (生产)   |
+| 缓存          | Redis                           |
+| 部署方案        | Docker + Nginx                  |
 
 ***
 

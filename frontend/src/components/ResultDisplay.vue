@@ -170,7 +170,7 @@ async function updateProfile() {
           多维度评估雷达图
         </h3>
         <div class="flex justify-center w-full">
-          <svg :viewBox="'0 0 240 240'" class="w-full max-w-[240px]">
+          <svg :viewBox="'0 0 280 280'" class="w-full max-w-[280px]">
             <!-- 网格环 -->
             <polygon
               v-for="(ring, ri) in radarGridRings"
@@ -370,12 +370,6 @@ async function updateProfile() {
         {{ profileUpdateMsg }}
       </p>
     </div>
-
-    <!-- Raw JSON -->
-    <details v-if="report" class="rounded-xl border border-surface-200 bg-surface-50 overflow-hidden">
-      <summary class="cursor-pointer px-4 py-2.5 text-xs font-medium text-surface-400 hover:text-surface-500 select-none">原始 JSON 数据</summary>
-      <pre class="overflow-x-auto p-4 text-xs text-surface-500 border-t border-surface-100">{{ report }}</pre>
-    </details>
   </div>
 
   <div v-else class="rounded-2xl border border-surface-200 bg-white p-12 text-center">

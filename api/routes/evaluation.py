@@ -18,7 +18,7 @@ from services.evaluation_service import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/evaluation", tags=["evaluation"])
+router = APIRouter(prefix="/api/evaluation", tags=["evaluation"])
 
 _evaluation_service: EvaluationService | None = None
 _evaluation_agent: EvaluationAgent | None = None
@@ -311,21 +311,57 @@ async def track_learning_behavior(
     request: BehaviorTrackingRequest,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """追踪并记录学习行为。"""
+    """追踪并持久化学习行为数据。"""
     try:
+        repo = ResourceRepository(db)
+        row = repo.save_behavior(
+            session_id=request.session_id,
+            action=request.action,
+            detail=request.detail,
+            duration_minutes=request.duration_minutes,
+        )
+
         logger.info(
-            "行为追踪: session=%s action=%s duration=%dmin",
+            "行为追踪: session=%s action=%s duration=%dmin id=%d",
             request.session_id,
             request.action,
             request.duration_minutes,
+            row.id,
         )
 
         return {
             "success": True,
             "message": f"行为 '{request.action}' 已记录",
             "session_id": request.session_id,
-            "tracked_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "behavior_id": row.id,
+            "tracked_at": row.created_at.isoformat() if row.created_at else "",
         }
     except Exception as exc:
         logger.error("行为追踪失败: %s", exc)
         raise HTTPException(status_code=500, detail=f"追踪失败: {exc}")
+
+
+class BehaviorAggregateResponse(BaseModel):
+    """行为聚合数据响应。"""
+    session_id: str
+    total_actions: int
+    total_duration_minutes: int
+    action_counts: dict[str, int]
+    resource_usage: dict[str, int]
+    quiz_results: list[dict[str, Any]]
+    knowledge_mastery: dict[str, float]
+
+
+@router.get("/behavior-summary/{session_id}", response_model=BehaviorAggregateResponse)
+async def get_behavior_summary(
+    session_id: str,
+    db: Session = Depends(get_db),
+) -> BehaviorAggregateResponse:
+    """获取某会话的学习行为聚合数据，供评估模块使用。"""
+    try:
+        repo = ResourceRepository(db)
+        data = repo.aggregate_behaviors(session_id)
+        return BehaviorAggregateResponse(session_id=session_id, **data)
+    except Exception as exc:
+        logger.error("获取行为聚合数据失败: %s", exc)
+        raise HTTPException(status_code=500, detail=f"获取行为数据失败: {exc}")

@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from agents.mindmap_agent import MindMapAgent
 from backend.core.deps import get_db
 from database.repository import ProfileRepository, ResourceRepository
+from schemas.profile import StudentProfile
 from workflows.graph import build_workflow, default_initial_state
 
 logger = logging.getLogger(__name__)
@@ -116,4 +118,66 @@ async def get_workflow_status(
         student_profile=student_profile,
         resources=resources,
         evaluation_reports=evaluation_reports,
+    )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/workflow/mindmap
+# ---------------------------------------------------------------------------
+
+class MindMapRequest(BaseModel):
+    topic: str = Field(..., min_length=1, description="学习主题，如 Python循环语句")
+    session_id: str | None = Field(default=None, description="可选会话标识")
+    model: str | None = Field(default=None, description="用户选择的 AI 模型 ID")
+
+
+class MindMapResponse(BaseModel):
+    topic: str
+    mermaid_code: str = Field(description="Mermaid mindmap 代码")
+    markdown: str = Field(description="Markdown 层级文本")
+    source: str = Field(description="spark | heuristic")
+    message: str = Field(description="生成状态说明")
+
+
+@router.post("/mindmap", response_model=MindMapResponse)
+async def generate_mindmap(body: MindMapRequest) -> MindMapResponse:
+    """生成思维导图：调用 MindMapAgent 返回 Mermaid 代码 + Markdown。"""
+    agent = MindMapAgent()
+    state: dict[str, Any] = {
+        "user_input": body.topic,
+        "session_id": body.session_id,
+        "model": body.model,
+    }
+    try:
+        result = await agent.run(state)
+    except Exception as exc:
+        logger.exception("思维导图生成失败 topic=%s", body.topic)
+        raise HTTPException(status_code=500, detail=f"思维导图生成失败: {exc}") from exc
+
+    mindmap_data = result.get("mindmap", {})
+    mermaid_code = result.get("mindmap_mermaid", "")
+
+    if not mermaid_code and mindmap_data:
+        from schemas.profile import MindMap
+        try:
+            mm = MindMap.model_validate(mindmap_data)
+            mermaid_code = mm.to_mermaid()
+        except Exception:
+            mermaid_code = "mindmap\n  " + body.topic
+
+    markdown = ""
+    if mindmap_data:
+        from schemas.profile import MindMap
+        try:
+            mm = MindMap.model_validate(mindmap_data)
+            markdown = mm.to_markdown()
+        except Exception:
+            markdown = ""
+
+    return MindMapResponse(
+        topic=body.topic,
+        mermaid_code=mermaid_code,
+        markdown=markdown,
+        source=mindmap_data.get("source", "heuristic"),
+        message=f"思维导图「{body.topic}」已生成",
     )

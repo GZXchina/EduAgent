@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from database.models import EvaluationReport, LearningResource, StudentProfileRecord
+from database.models import EvaluationReport, LearningBehaviorRecord, LearningResource, StudentProfileRecord
 
 
 class ProfileRepository:
@@ -104,6 +104,85 @@ class ResourceRepository:
             return json.loads(row.content_json)
         except json.JSONDecodeError:
             return {"raw": row.content_json}
+
+    def save_behavior(
+        self, session_id: str, action: str, detail: dict, duration_minutes: int = 0
+    ) -> LearningBehaviorRecord:
+        """持久化一条学习行为记录。"""
+        payload = json.dumps(detail, ensure_ascii=False)
+        row = LearningBehaviorRecord(
+            session_id=session_id,
+            action=action,
+            detail_json=payload,
+            duration_minutes=duration_minutes,
+        )
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def get_behaviors_by_session(self, session_id: str) -> list[LearningBehaviorRecord]:
+        """获取某会话的全部学习行为记录。"""
+        stmt = (
+            select(LearningBehaviorRecord)
+            .where(LearningBehaviorRecord.session_id == session_id)
+            .order_by(LearningBehaviorRecord.created_at.asc())
+        )
+        return list(self.db.scalars(stmt).all())
+
+    def aggregate_behaviors(self, session_id: str) -> dict:
+        """聚合某会话的学习行为数据，用于评估报告。"""
+        behaviors = self.get_behaviors_by_session(session_id)
+        if not behaviors:
+            return {
+                "total_actions": 0,
+                "total_duration_minutes": 0,
+                "action_counts": {},
+                "resource_usage": {},
+                "quiz_results": [],
+                "knowledge_mastery": {},
+            }
+
+        action_counts: dict[str, int] = {}
+        total_duration = 0
+        resource_usage: dict[str, int] = {}
+        quiz_results: list[dict] = []
+        knowledge_mastery: dict[str, float] = {}
+
+        for row in behaviors:
+            action_counts[row.action] = action_counts.get(row.action, 0) + 1
+            total_duration += row.duration_minutes
+
+            try:
+                detail = json.loads(row.detail_json)
+            except json.JSONDecodeError:
+                detail = {}
+
+            # 资源浏览计数
+            if row.action == "resource_view" and "resource_type" in detail:
+                rt = detail["resource_type"]
+                resource_usage[rt] = resource_usage.get(rt, 0) + 1
+
+            # 练习结果
+            if row.action == "quiz" and "correct" in detail:
+                quiz_results.append({
+                    "correct": detail["correct"],
+                    "question": detail.get("question", ""),
+                    "knowledge_point": detail.get("knowledge_point", ""),
+                })
+
+            # 知识掌握度上报
+            if row.action == "knowledge_mastery" and "topic" in detail:
+                knowledge_mastery[detail["topic"]] = detail.get("score", 0.0)
+
+        return {
+            "total_actions": len(behaviors),
+            "total_duration_minutes": total_duration,
+            "action_counts": action_counts,
+            "resource_usage": resource_usage,
+            "quiz_results": quiz_results,
+            "knowledge_mastery": knowledge_mastery,
+        }
 
     @staticmethod
     def report_to_dict(row: EvaluationReport) -> dict:

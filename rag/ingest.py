@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from typing import Any
 
 from backend.settings import get_settings
 from rag.chunker import split_text
@@ -26,6 +27,30 @@ def ingest_file(path: Path, knowledge_root: Path) -> int:
     n = add_chunks(chunks, file_id=fid)
     logger.info("入库 %s -> %s 切片", rel, n)
     return n
+
+
+def ingest_single_file(filename: str, content: bytes) -> dict[str, Any]:
+    settings = get_settings()
+    root = Path(settings.knowledge_dir)
+    root.mkdir(parents=True, exist_ok=True)
+
+    safe_name = Path(filename).name
+    dest = root / safe_name
+
+    if dest.exists():
+        stem = dest.stem
+        suffix = dest.suffix
+        dest = root / f"{stem}_{hashlib.md5(content).hexdigest()[:6]}{suffix}"
+
+    dest.write_bytes(content)
+    logger.info("上传文件写入: %s (%d bytes)", dest, len(content))
+
+    text = load_document(dest)
+    chunks = split_text(text, source=safe_name)
+    fid = _file_id(dest, root)
+    n = add_chunks(chunks, file_id=fid)
+    logger.info("文件 %s 入库 -> %s 切片", safe_name, n)
+    return {"chunks": n, "filename": safe_name, "path": str(dest)}
 
 
 def ingest_knowledge_directory(knowledge_dir: str | None = None) -> int:

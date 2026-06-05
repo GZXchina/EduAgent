@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     spark_api_key: str = ""
     spark_api_secret: str = ""
     spark_api_password: str = ""
-    spark_ws_url: str = "wss://spark-api.xf-yun.com/v4.0/chat"
-    spark_domain: str = "4.0Ultra"
+    spark_ws_url: str = "wss://spark-api.xf-yun.com/v1.1/chat"
+    spark_domain: str = "lite"
     spark_api_url: str = "https://spark-api-open.xf-yun.com/v1/chat/completions"
     spark_model: str = "generalv3.5"
     spark_timeout: float = 120.0
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     asr_app_id: str = ""
     asr_api_key: str = ""
     asr_api_secret: str = ""
-    asr_ws_url: str = "wss://raasr.xfyun.cn/v2/recognize"
+    asr_ws_url: str = "wss://iat-api.xfyun.cn/v2/iat"
 
     # 讯飞TTS语音合成
     tts_app_id: str = ""
@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     auto_ingest_on_startup: bool = False
 
     profile_cache_ttl: int = 3600
+
+    # 认证
+    secret_key: str = "change-me-in-production-please"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
+    admin_username: str = "admin"
+    admin_password: str = "admin123"
 
     @property
     def cors_origin_list(self) -> list[str]:

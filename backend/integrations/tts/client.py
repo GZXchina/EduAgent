@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from functools import lru_cache
-from typing import AsyncIterator
+from urllib.parse import urlparse, quote
 
 import websockets
 
@@ -27,12 +27,41 @@ class TTSClient:
         return bool(self.settings.tts_app_id and self.settings.tts_api_key and self.settings.tts_api_secret)
 
     def _build_auth_url(self, url: str) -> str:
-        ts = str(int(time.time()))
-        app_id = self.settings.tts_app_id
-        api_key = self.settings.tts_api_key
-        sign_str = app_id + ts
-        sign = base64.b64encode(hmac.new(api_key.encode(), sign_str.encode(), digestmod=hashlib.sha256).digest()).decode()
-        return f"{url}?appId={app_id}&ts={ts}&sign={sign}"
+        """构建讯飞 TTS WebSocket v2 鉴权 URL。
+
+        鉴权方式：使用 authorization / date / host 查询参数，
+        签名算法为 HMAC-SHA256(base64)。
+        """
+        parsed = urlparse(url)
+        host = parsed.hostname or "tts-api.xfyun.cn"
+        uri = parsed.path or "/v2/tts"
+
+        # 生成 RFC 1123 格式的 GMT 时间
+        date = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime())
+
+        # 签名原文
+        signature_origin = f"host: {host}\ndate: {date}\nGET {uri} HTTP/1.1"
+
+        # HMAC-SHA256 签名（使用 apiSecret 作为密钥）
+        signature_sha = hmac.new(
+            self.settings.tts_api_secret.encode(),
+            signature_origin.encode(),
+            digestmod=hashlib.sha256,
+        ).digest()
+
+        signature = base64.b64encode(signature_sha).decode()
+
+        # 构建 authorization 原文
+        authorization_origin = (
+            f'api_key="{self.settings.tts_api_key}", '
+            f'algorithm="hmac-sha256", '
+            f'headers="host date request-line", '
+            f'signature="{signature}"'
+        )
+
+        authorization = base64.b64encode(authorization_origin.encode()).decode()
+
+        return f"{url}?authorization={quote(authorization, safe='')}&date={quote(date)}&host={host}"
 
     async def synthesize(self, text: str, voice: str = "xiaoyan") -> bytes:
         """将文字合成为语音，返回PCM/WAV格式音频数据。"""
@@ -43,11 +72,13 @@ class TTSClient:
         audio_chunks: list[bytes] = []
 
         try:
-            async with websockets.connect(url, max_size=None) as ws:
+            async with websockets.connect(url, max_size=None, open_timeout=10, close_timeout=10) as ws:
+                logger.info("TTS WebSocket 已连接，发送合成请求: voice=%s, text=%s", voice, text[:50])
                 await ws.send(json.dumps({
-                    "common": {"appId": self.settings.tts_app_id},
+                    "common": {"app_id": self.settings.tts_app_id},
                     "business": {
                         "aue": "lame",
+                        "sfl": 1,
                         "auf": "audio/L16;rate=16000",
                         "vcn": voice,
                         "speed": 50,

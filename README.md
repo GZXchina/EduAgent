@@ -23,6 +23,9 @@
 ## 核心特性
 
 - **11个智能体协同**：画像、规划、知识拆解、PPT/题库/代码/思维导图/视频生成、答疑、安全审核、评估
+- **用户视角对话**：AI回复分层展示，主回复仅包含答疑内容，内部处理过程折叠隐藏，用户体验简洁清晰
+- **文件上传入库**：支持 MD/PDF/TXT/DOCX 上传，自动切分入库到RAG知识库，可针对文件内容提问
+- **语音输入支持**：浏览器录音 + 讯飞ASR语音转文字，自动填入输入框，解放双手
 - **学习闭环回流**：评估得分不达标时自动回流重新规划（最多2次），实现动态学习路径调整
 - **个性化学习路径**：根据画像生成周计划、知识点推荐、资源匹配、方案建议
 - **智能资源推荐**：基于学习风格和目标自动推荐最优资源组合
@@ -108,7 +111,9 @@ npm run dev
 | POST | `/api/profile/analyze` | 学生画像分析 |
 | POST | `/api/profile/build-profile` | 构建完整画像 |
 | GET | `/api/profile/{session_id}` | 查询学生画像 |
-| POST | `/api/chat` | 简化工作流对话 |
+| POST | `/api/chat` | 简化工作流对话（分层返回：主回复 + 内部步骤） |
+| POST | `/api/chat/stream` | 流式对话（SSE，仅返回答疑内容，处理过程折叠） |
+| POST | `/api/chat/upload-file` | 上传知识文件（MD/PDF/TXT），自动入库RAG |
 | POST | `/api/workflow/execute` | 执行完整工作流（含资源生成+评估） |
 | GET | `/api/workflow/status/{session_id}` | 查询工作流执行状态 |
 | GET | `/api/resources/{session_id}` | 获取所有已生成资源 |
@@ -121,8 +126,8 @@ npm run dev
 | GET | `/api/learning-path/{session_id}` | 查询学习路径及推荐资源 |
 | GET | `/api/recommend/{session_id}` | 智能资源推荐（基于画像风格+目标） |
 | POST | `/api/video/generate` | AI视频生成（脚本+TTS音频合成） |
-| POST | `/api/voice/asr` | 语音识别 |
-| POST | `/api/voice/tts` | 语音合成 |
+| POST | `/api/voice/asr` | 语音识别（讯飞ASR） |
+| POST | `/api/voice/tts` | 语音合成（讯飞TTS） |
 
 ## Docker 部署
 

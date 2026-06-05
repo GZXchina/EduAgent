@@ -4,6 +4,12 @@ import operator
 from typing import Annotated, Any, TypedDict
 
 
+# 用户意图类型：决定工作流执行路径
+INTENT_SIMPLE_QA = "simple_qa"      # 简单问答：只跑 tutor
+INTENT_STUDY_PLAN = "study_plan"    # 学习规划：profile + planner + tutor
+INTENT_FULL_LEARN = "full_learn"    # 完整学习：全流程
+
+
 class AgentState(TypedDict, total=False):
     """LangGraph 共享状态（与架构文档一致，可随实现扩展）。"""
 
@@ -22,3 +28,5 @@ class AgentState(TypedDict, total=False):
     messages: Annotated[list[dict[str, Any]], operator.add]
     session_id: str | None
     user_input: str
+    model: str | None  # 用户选择的 AI 模型 ID
+    intent: str  # 用户意图：simple_qa / study_plan / full_learn

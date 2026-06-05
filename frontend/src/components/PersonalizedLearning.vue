@@ -10,7 +10,7 @@
  * 5. 智能推荐：基于画像的资源精准推送
  */
 
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 
 const message = ref('我是计算机专业学生，想备战蓝桥杯，初学Python，喜欢看图解，每天1小时，循环不太会')
 const sessionId = ref('')
@@ -18,6 +18,219 @@ const profileJson = ref('')
 const loading = ref(false)
 const error = ref('')
 const activeTab = ref<'profile' | 'path'>('profile')
+
+/* ------------------------------------------------------------------ */
+/*  AI 模型状态                                                         */
+/* ------------------------------------------------------------------ */
+
+interface ModelStatus {
+  status: 'connected' | 'disconnected' | 'timeout' | 'error' | 'checking'
+  model_label: string
+  latency_ms: number | null
+  fallback_mode: boolean
+  message: string
+}
+
+const modelStatus = ref<ModelStatus>({
+  status: 'checking',
+  model_label: '检测中',
+  latency_ms: null,
+  fallback_mode: false,
+  message: '',
+})
+
+let statusCheckTimer: ReturnType<typeof setInterval> | null = null
+
+async function checkModelStatus() {
+  modelStatus.value.status = 'checking'
+  try {
+    const res = await fetch('/api/chat/model-status')
+    if (res.ok) {
+      const data = await res.json()
+      modelStatus.value = {
+        status: data.status,
+        model_label: data.model_label || 'Spark',
+        latency_ms: data.latency_ms,
+        fallback_mode: data.fallback_mode,
+        message: data.message || '',
+      }
+    }
+  } catch {
+    modelStatus.value.status = 'offline'
+    modelStatus.value.message = '无法连接'
+  }
+}
+
+function getStatusColor(): string {
+  switch (modelStatus.value.status) {
+    case 'connected': return 'bg-emerald-500'
+    case 'disconnected': return 'bg-rose-500'
+    case 'timeout': return 'bg-amber-500'
+    case 'error': return 'bg-rose-500'
+    default: return 'bg-surface-400'
+  }
+}
+
+function getStatusText(): string {
+  switch (modelStatus.value.status) {
+    case 'connected': return '已连接'
+    case 'disconnected': return '离线'
+    case 'timeout': return '超时'
+    case 'error': return '错误'
+    case 'checking': return '检测中'
+    default: return modelStatus.value.message || '未知'
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  AI 模型选择                                                         */
+/* ------------------------------------------------------------------ */
+
+interface ModelOption {
+  id: string
+  label: string
+  description: string
+  is_custom?: boolean
+  provider?: string
+  protocol?: string
+}
+const selectedModel = ref('Spark-X2-Flash')
+const availableModels = ref<ModelOption[]>([])
+const showModelDropdown = ref(false)
+
+// 自定义模型表单
+const showAddModelModal = ref(false)
+const newModel = ref({
+  label: '',
+  description: '',
+  provider: 'spark',
+  protocol: 'http',
+  model_name: '',
+  api_url: '',
+  api_key: '',
+  ws_url: '',
+  domain: '',
+})
+const addingModel = ref(false)
+const addModelError = ref('')
+
+const providers = [
+  { value: 'spark', label: '讯飞星火' },
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'qwen', label: '通义千问' },
+  { value: 'other', label: '其他' },
+]
+
+const providerTemplates: Record<string, { api_url: string; protocol: string }> = {
+  spark: { api_url: 'https://spark-api-open.xf-yun.com/v1/chat/completions', protocol: 'http' },
+  openai: { api_url: 'https://api.openai.com/v1/chat/completions', protocol: 'http' },
+  deepseek: { api_url: 'https://api.deepseek.com/v1/chat/completions', protocol: 'http' },
+  qwen: { api_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions', protocol: 'http' },
+  other: { api_url: '', protocol: 'http' },
+}
+
+async function fetchModels() {
+  try {
+    const res = await fetch('/api/chat/models')
+    if (res.ok) {
+      const data = await res.json()
+      availableModels.value = data.models || []
+      if (availableModels.value.length > 0 && !availableModels.value.find(m => m.id === selectedModel.value)) {
+        selectedModel.value = availableModels.value[0].id
+      }
+    }
+  } catch {
+    // 静默失败
+  }
+}
+
+function getSelectedModelLabel(): string {
+  const model = availableModels.value.find(m => m.id === selectedModel.value)
+  return model ? model.label : selectedModel.value
+}
+
+function toggleModelDropdown() {
+  showModelDropdown.value = !showModelDropdown.value
+}
+
+function selectModel(modelId: string) {
+  selectedModel.value = modelId
+  showModelDropdown.value = false
+  checkModelStatus()
+}
+
+function openAddModelModal() {
+  newModel.value = {
+    label: '',
+    description: '',
+    provider: 'spark',
+    protocol: 'http',
+    model_name: '',
+    api_url: providerTemplates.spark.api_url,
+    api_key: '',
+    ws_url: '',
+    domain: '',
+  }
+  addModelError.value = ''
+  showAddModelModal.value = true
+}
+
+function onProviderChange(provider: string) {
+  const template = providerTemplates[provider]
+  if (template) {
+    newModel.value.api_url = template.api_url
+    newModel.value.protocol = template.protocol
+  }
+}
+
+async function addCustomModel() {
+  addModelError.value = ''
+  if (!newModel.value.label.trim()) {
+    addModelError.value = '请输入模型名称'
+    return
+  }
+  if (!newModel.value.model_name.trim()) {
+    addModelError.value = '请输入模型标识符'
+    return
+  }
+  addingModel.value = true
+  try {
+    const res = await fetch('/api/models/custom', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newModel.value),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error((err as { detail?: string }).detail || `HTTP ${res.status}`)
+    }
+    showAddModelModal.value = false
+    showModelDropdown.value = false
+    await fetchModels()
+  } catch (e) {
+    addModelError.value = e instanceof Error ? e.message : '添加失败'
+  } finally {
+    addingModel.value = false
+  }
+}
+
+async function deleteCustomModel(modelId: string, event: Event) {
+  event.stopPropagation()
+  if (!confirm('确定要删除该模型吗？')) return
+  try {
+    const res = await fetch(`/api/models/custom/${modelId}`, { method: 'DELETE' })
+    if (res.ok) {
+      if (selectedModel.value === modelId) {
+        selectedModel.value = 'Spark-X2-Flash'
+        checkModelStatus()
+      }
+      await fetchModels()
+    }
+  } catch {
+    // 静默失败
+  }
+}
 
 const recommendations = ref<RecommendationItem[]>([])
 const recLoading = ref(false)
@@ -317,6 +530,23 @@ function tagColorClass(color: string): string {
   }
   return map[color] ?? 'bg-surface-100 text-surface-600 border-surface-200'
 }
+
+onMounted(() => {
+  fetchModels()
+  checkModelStatus()
+  statusCheckTimer = setInterval(() => {
+    if (!loading.value) {
+      checkModelStatus()
+    }
+  }, 60000)
+})
+
+onBeforeUnmount(() => {
+  if (statusCheckTimer) {
+    clearInterval(statusCheckTimer)
+    statusCheckTimer = null
+  }
+})
 </script>
 
 <template>
@@ -327,6 +557,101 @@ function tagColorClass(color: string): string {
         <h2 class="text-xl font-bold text-surface-800">个性化学习中心</h2>
         <p class="text-sm text-surface-400">AI 驱动的学生画像分析与学习路径规划</p>
       </div>
+    </div>
+
+    <!-- AI 模型连接状态栏 -->
+    <div class="flex items-center justify-between px-3 py-1.5 rounded-xl bg-surface-50 border border-surface-100 text-xs">
+      <div class="flex items-center gap-2">
+        <span class="relative flex h-2 w-2">
+          <span class="absolute inline-flex h-full w-full rounded-full opacity-75" :class="getStatusColor()" />
+          <span class="relative inline-flex rounded-full h-2 w-2" :class="getStatusColor()" />
+        </span>
+        <span class="font-medium text-surface-600">{{ modelStatus.model_label || getSelectedModelLabel() }}</span>
+        <span class="text-surface-400">{{ getStatusText() }}</span>
+        <span v-if="modelStatus.latency_ms" class="text-surface-300 font-mono">{{ modelStatus.latency_ms }}ms</span>
+        <span v-if="modelStatus.fallback_mode && modelStatus.status !== 'checking'" class="px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200">
+          本地模式
+        </span>
+        <!-- 模型选择器 -->
+        <span class="flex items-center gap-1 ml-2 border-l border-surface-200 pl-2">
+          <div class="relative">
+            <button
+              type="button"
+              class="flex items-center gap-1 px-2 py-0.5 rounded text-[11px] transition-all"
+              :class="showModelDropdown ? 'bg-brand-50 text-brand-600' : 'text-surface-500 hover:text-brand-500'"
+              @click="toggleModelDropdown()"
+            >
+              <span>{{ getSelectedModelLabel() }}</span>
+              <svg class="w-2.5 h-2.5 transition-transform" :class="showModelDropdown ? 'rotate-180' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+              </svg>
+            </button>
+            <transition name="dropdown">
+              <div
+                v-if="showModelDropdown"
+                class="absolute top-full left-0 mt-1 w-64 rounded-xl bg-white border border-surface-200 shadow-xl z-30"
+              >
+                <div class="px-3 py-2 border-b border-surface-100 flex items-center justify-between">
+                  <span class="text-[10px] font-semibold text-surface-400 uppercase tracking-wider">选择 AI 模型</span>
+                  <button
+                    type="button"
+                    class="text-[10px] px-2 py-0.5 rounded bg-brand-50 text-brand-600 hover:bg-brand-100 transition-colors"
+                    @click.stop="openAddModelModal()"
+                  >
+                    + 新增模型
+                  </button>
+                </div>
+                <div class="max-h-48 overflow-y-auto py-1">
+                  <button
+                    v-for="m in availableModels"
+                    :key="m.id"
+                    type="button"
+                    class="w-full text-left px-3 py-2 transition-colors relative group"
+                    :class="m.id === selectedModel ? 'bg-brand-50 text-brand-700' : 'text-surface-600 hover:bg-surface-50'"
+                    @click="selectModel(m.id)"
+                  >
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center gap-2">
+                        <span class="text-sm font-medium">{{ m.label }}</span>
+                        <span v-if="m.is_custom" class="text-[9px] px-1 py-0.5 rounded bg-violet-100 text-violet-600">自定义</span>
+                      </div>
+                      <div class="flex items-center gap-1">
+                        <button
+                          v-if="m.is_custom"
+                          type="button"
+                          class="opacity-0 group-hover:opacity-100 w-5 h-5 rounded flex items-center justify-center text-surface-400 hover:text-rose-500 hover:bg-rose-50 transition-all"
+                          title="删除模型"
+                          @click.stop="deleteCustomModel(m.id, $event)"
+                        >
+                          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                          </svg>
+                        </button>
+                        <svg v-if="m.id === selectedModel" class="w-4 h-4 text-brand-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                        </svg>
+                      </div>
+                    </div>
+                    <p class="text-[11px] mt-0.5" :class="m.id === selectedModel ? 'text-brand-500' : 'text-surface-400'">
+                      {{ m.description }}
+                    </p>
+                  </button>
+                </div>
+              </div>
+            </transition>
+          </div>
+        </span>
+      </div>
+      <button
+        type="button"
+        class="text-surface-400 hover:text-brand-500 transition-colors"
+        title="刷新连接状态"
+        @click="checkModelStatus()"
+      >
+        <svg class="w-3.5 h-3.5" :class="modelStatus.status === 'checking' ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Tab 切换 -->
@@ -786,5 +1111,122 @@ function tagColorClass(color: string): string {
     </div>
 
     <p v-if="error" class="text-sm text-rose-500 bg-rose-50 rounded-xl px-4 py-3 border border-rose-200 animate-slide-up">{{ error }}</p>
+
+    <!-- 新增模型弹窗 -->
+    <transition name="modal">
+      <div
+        v-if="showAddModelModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+        @click.self="showAddModelModal = false"
+      >
+        <div class="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden mx-4">
+          <div class="px-6 py-4 border-b border-surface-100 flex items-center justify-between">
+            <h3 class="text-lg font-semibold text-surface-800">新增 AI 模型</h3>
+            <button
+              type="button"
+              class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors"
+              @click="showAddModelModal = false"
+            >
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="px-6 py-4 space-y-4 max-h-[60vh] overflow-y-auto">
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">服务商</label>
+              <select
+                v-model="newModel.provider"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+                @change="onProviderChange(newModel.provider)"
+              >
+                <option v-for="p in providers" :key="p.value" :value="p.value">{{ p.label }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">模型显示名称 *</label>
+              <input
+                v-model="newModel.label"
+                type="text"
+                placeholder="如：GPT-4o、DeepSeek-V3"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">模型标识符 *</label>
+              <input
+                v-model="newModel.model_name"
+                type="text"
+                placeholder="如：gpt-4o、deepseek-chat"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+              />
+              <p class="text-[11px] text-surface-400 mt-1">API 调用时使用的模型 ID</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">API 地址</label>
+              <input
+                v-model="newModel.api_url"
+                type="text"
+                placeholder="https://api.example.com/v1/chat/completions"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+              />
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">API Key（可选）</label>
+              <input
+                v-model="newModel.api_key"
+                type="password"
+                placeholder="留空则使用系统默认凭据"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+              />
+              <p class="text-[11px] text-surface-400 mt-1">留空将复用平台已配置的凭据</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-surface-700 mb-1">描述（可选）</label>
+              <input
+                v-model="newModel.description"
+                type="text"
+                placeholder="简短描述模型特点"
+                class="w-full px-3 py-2 border border-surface-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500"
+              />
+            </div>
+            <div v-if="addModelError" class="px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-600">
+              {{ addModelError }}
+            </div>
+          </div>
+          <div class="px-6 py-4 border-t border-surface-100 flex justify-end gap-3">
+            <button
+              type="button"
+              class="px-4 py-2 text-sm text-surface-600 hover:text-surface-800 transition-colors"
+              @click="showAddModelModal = false"
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              class="px-4 py-2 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="addingModel"
+              @click="addCustomModel()"
+            >
+              {{ addingModel ? '添加中...' : '添加模型' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
+
+<style scoped>
+.dropdown-enter-active { transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+.dropdown-leave-active { transition: all 0.15s ease-in; }
+.dropdown-enter-from { opacity: 0; transform: translateY(-4px); }
+.dropdown-leave-to { opacity: 0; transform: translateY(-2px); }
+
+.modal-enter-active { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.modal-leave-active { transition: all 0.2s ease-in; }
+.modal-enter-from { opacity: 0; }
+.modal-leave-to { opacity: 0; }
+.modal-enter-from > div { transform: scale(0.95); opacity: 0; }
+.modal-enter-active > div { transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+</style>
