@@ -12,9 +12,10 @@
  * 7. 保持原有 /api/voice/tts 和 /api/voice/asr API 调用逻辑不变
  */
 import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { createPcmWavRecorder, type PcmWavRecorder } from '../utils/audioRecorder'
 
-const text = ref('你好，欢迎使用EduAgent智能学习平台')
-const voice = ref('xiaoyan')
+const text = ref('你好，欢迎使用 EduAgent 智能学习平台')
+const voice = ref('x4_xiaoyan')
 const speechRate = ref(5)
 const audioUrl = ref('')
 const audioBase64 = ref('')
@@ -33,14 +34,13 @@ const actionFeedback = ref('')
 let recordingTimer: ReturnType<typeof setInterval> | null = null
 let audioEl: HTMLAudioElement | null = null
 let progressTimer: ReturnType<typeof setInterval> | null = null
-let mediaRecorder: MediaRecorder | null = null
-let mediaStream: MediaStream | null = null
+let activeRecorder: PcmWavRecorder | null = null
 
 const voices = [
-  { key: 'xiaoyan', label: '小燕', gender: '女', emoji: '👩', color: 'bg-pink-50 border-pink-200 text-pink-700', activeColor: 'ring-pink-400/30' },
-  { key: 'xiaoyu', label: '小宇', gender: '男', emoji: '👨', color: 'bg-blue-50 border-blue-200 text-blue-700', activeColor: 'ring-blue-400/30' },
-  { key: 'catherine', label: '小研', gender: '女', emoji: '👩‍💼', color: 'bg-violet-50 border-violet-200 text-violet-700', activeColor: 'ring-violet-400/30' },
-  { key: 'xiaofeng', label: '小峰', gender: '男', emoji: '🧑‍💻', color: 'bg-emerald-50 border-emerald-200 text-emerald-700', activeColor: 'ring-emerald-400/30' },
+  { key: 'x4_xiaoyan', label: '小燕', gender: '女', emoji: '👩', color: 'bg-pink-50 border-pink-200 text-pink-700', activeColor: 'ring-pink-400/30' },
+  { key: 'x4_xiaoyu', label: '小宇', gender: '男', emoji: '👨', color: 'bg-blue-50 border-blue-200 text-blue-700', activeColor: 'ring-blue-400/30' },
+  { key: 'x4_xiaoyuan', label: '小研', gender: '女', emoji: '👩‍', color: 'bg-violet-50 border-violet-200 text-violet-700', activeColor: 'ring-violet-400/30' },
+  { key: 'x4_xiaofeng', label: '小峰', gender: '男', emoji: '‍💻', color: 'bg-emerald-50 border-emerald-200 text-emerald-700', activeColor: 'ring-emerald-400/30' },
 ] as const
 
 const rateLabels = computed(() => {
@@ -383,50 +383,12 @@ async function recognizeSpeech() {
   recognitionText.value = ''
   loading.value = true
   try {
+    activeRecorder = await createPcmWavRecorder()
     isRecording.value = true
     recordingDuration.value = 0
     recordingTimer = setInterval(() => { recordingDuration.value++ }, 1000)
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    mediaStream = stream
-    mediaRecorder = new MediaRecorder(stream)
-    const chunks: Blob[] = []
-
-    mediaRecorder.ondataavailable = (e) => chunks.push(e.data)
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(track => track.stop())
-      mediaStream = null
-      if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
-
-      const blob = new Blob(chunks, { type: 'audio/webm' })
-      const formData = new FormData()
-      formData.append('audio', blob, 'recording.wav')
-      formData.append('format', 'wav')
-
-      try {
-        const res = await fetch('/api/voice/asr', {
-          method: 'POST',
-          body: formData,
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        recognitionText.value = data.text ?? ''
-      } catch (e) {
-        error.value = e instanceof Error ? e.message : '语音识别失败'
-      } finally {
-        loading.value = false
-        isRecording.value = false
-      }
-    }
-
-    mediaRecorder.start()
     // 讯飞 ASR 支持最长 60 秒单次识别，设置自动停止
     await new Promise<void>(resolve => {
-      const checkStop = () => {
-        if (!isRecording.value || recordingDuration.value >= 60) {
-          resolve()
-        }
-      }
       const interval = setInterval(() => {
         if (!isRecording.value || recordingDuration.value >= 60) {
           clearInterval(interval)
@@ -434,29 +396,46 @@ async function recognizeSpeech() {
         }
       }, 500)
     })
-    if (mediaRecorder && mediaRecorder.state === 'recording') {
-      mediaRecorder.stop()
+    const recorder = activeRecorder
+    activeRecorder = null
+    if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
+    isRecording.value = false
+
+    const blob = await recorder.stop()
+    if (blob.size === 0) throw new Error('未录制到语音内容')
+
+    const formData = new FormData()
+    formData.append('audio', blob, 'recording.wav')
+    formData.append('format', 'wav')
+
+    const res = await fetch('/api/voice/asr', {
+      method: 'POST',
+      body: formData,
+    })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new Error(detail?.detail || `HTTP ${res.status}`)
     }
+    const data = await res.json()
+    recognitionText.value = data.text ?? ''
   } catch (e) {
     error.value = e instanceof Error ? e.message : '无法访问麦克风'
+    if (activeRecorder) {
+      await activeRecorder.cancel().catch(() => {})
+      activeRecorder = null
+    }
+    if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
+  } finally {
     loading.value = false
     isRecording.value = false
-    if (recordingTimer) { clearInterval(recordingTimer); recordingTimer = null }
   }
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop()
-  }
   isRecording.value = false
   if (recordingTimer) {
     clearInterval(recordingTimer)
     recordingTimer = null
-  }
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(track => track.stop())
-    mediaStream = null
   }
 }
 
@@ -486,12 +465,7 @@ onBeforeUnmount(() => {
   if (recordingTimer) clearInterval(recordingTimer)
   if (progressTimer) clearInterval(progressTimer)
   if (statusCheckTimer) clearInterval(statusCheckTimer)
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop()
-  }
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(track => track.stop())
-  }
+  if (activeRecorder) activeRecorder.cancel().catch(() => {})
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
 })
 </script>

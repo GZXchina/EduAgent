@@ -63,17 +63,23 @@ class TTSClient:
 
         return f"{url}?authorization={quote(authorization, safe='')}&date={quote(date)}&host={host}"
 
-    async def synthesize(self, text: str, voice: str = "xiaoyan") -> bytes:
-        """将文字合成为语音，返回PCM/WAV格式音频数据。"""
+    async def synthesize(self, text: str, voice: str = "x4_xiaoyan") -> bytes:
+        """将文字合成为语音，返回 MP3 音频数据。
+        
+        Args:
+            text: 要合成的文本
+            voice: 音色参数名，默认 x4_xiaoyan（通用女声）
+                   可选值：x4_xiaoyuan、x4_xiaozhi、x4_xiaomei、x4_xiaomeng 等
+        """
         if not self.configured:
-            raise RuntimeError("讯飞TTS未配置：请在 .env 中设置 TTS_APP_ID / TTS_API_KEY / TTS_API_SECRET")
+            raise RuntimeError("讯飞 TTS 未配置：请在 .env 中设置 TTS_APP_ID / TTS_API_KEY / TTS_API_SECRET")
 
         url = self._build_auth_url(self.settings.tts_ws_url)
         audio_chunks: list[bytes] = []
 
         try:
             async with websockets.connect(url, max_size=None, open_timeout=10, close_timeout=10) as ws:
-                logger.info("TTS WebSocket 已连接，发送合成请求: voice=%s, text=%s", voice, text[:50])
+                logger.info("TTS WebSocket 已连接，发送合成请求：voice=%s, text=%s", voice, text[:50])
                 await ws.send(json.dumps({
                     "common": {"app_id": self.settings.tts_app_id},
                     "business": {
@@ -97,7 +103,7 @@ class TTSClient:
                     data = json.loads(resp)
                     code = data.get("code")
                     if code and code != 0:
-                        raise RuntimeError(f"TTS错误 code={code}: {data.get('message', '')}")
+                        raise RuntimeError(f"TTS 错误 code={code}: {data.get('message', '')}")
 
                     audio_base64 = data.get("data", {}).get("audio")
                     if audio_base64:
@@ -107,16 +113,22 @@ class TTSClient:
                         break
 
         except websockets.exceptions.WebSocketException as exc:
-            logger.error("TTS WebSocket连接失败: %s", exc)
-            raise RuntimeError(f"TTS连接失败: {exc}")
+            logger.error("TTS WebSocket 连接失败：%s", exc)
+            raise RuntimeError(f"TTS 连接失败：{exc}")
 
         if not audio_chunks:
-            raise RuntimeError("TTS未返回任何音频数据")
+            raise RuntimeError("TTS 未返回任何音频数据")
 
         return b"".join(audio_chunks)
 
-    async def synthesize_to_file(self, text: str, output_path: str, voice: str = "xiaoyan") -> str:
-        """将文字合成为音频文件。"""
+    async def synthesize_to_file(self, text: str, output_path: str, voice: str = "x4_xiaoyan") -> str:
+        """将文字合成为音频文件。
+        
+        Args:
+            text: 要合成的文本
+            output_path: 输出文件路径
+            voice: 音色参数名，默认 x4_xiaoyan
+        """
         audio_data = await self.synthesize(text, voice)
         with open(output_path, "wb") as f:
             f.write(audio_data)
