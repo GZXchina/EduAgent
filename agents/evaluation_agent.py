@@ -135,9 +135,7 @@ class EvaluationAgent(BaseAgent):
         return {
             "student_profile": updated_profile,
             "evaluation_report": report,
-            "messages": [
-                {"role": "assistant", "content": self._format_report_markdown(report)}
-            ],
+            "messages": [],
         }
 
     def _format_report_markdown(self, report: dict[str, Any]) -> str:
@@ -165,6 +163,12 @@ class EvaluationAgent(BaseAgent):
         return "\n".join(lines)
 
     async def _generate_evaluation(self, profile: StudentProfile, resource_usage: dict[str, Any]) -> dict[str, Any]:
+        # 如果没有生成任何资源，直接使用规则评估（跳过 LLM 调用，节省 2-5s）
+        has_resources = any(bool(v) for v in resource_usage.values())
+        if not has_resources:
+            logger.info("无资源生成，使用轻量规则评估（跳过 LLM）")
+            return generate_evaluation_report(profile, resource_usage)
+
         if self.spark.configured:
             try:
                 return await self._generate_with_spark(profile, resource_usage)

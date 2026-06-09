@@ -248,6 +248,10 @@ class MindMapNode(BaseModel):
     id: str = Field(description="节点ID")
     text: str = Field(description="节点文本")
     children: list["MindMapNode"] = Field(default_factory=list, description="子节点")
+    style: str | None = Field(default=None, description="CSS类名，如 highlight, important")
+    icon: str | None = Field(default=None, description="图标标识，如 💡, ⚠️, 📖")
+    link: str | None = Field(default=None, description="关联链接URL")
+    note: str | None = Field(default=None, description="备注信息（hover显示）")
 
 
 class MindMap(BaseModel):
@@ -258,7 +262,7 @@ class MindMap(BaseModel):
     source: str = Field(default="heuristic", description="spark | heuristic")
 
     def to_mermaid(self) -> str:
-        """转换为Mermaid思维导图格式。"""
+        """转换为Mermaid思维导图格式（兼容保留）。"""
         lines = ["mindmap"]
         lines.append(self._node_to_mermaid(self.root, 0))
         return "\n".join(lines)
@@ -267,9 +271,7 @@ class MindMap(BaseModel):
     def _sanitize_mermaid_text(text: str) -> str:
         """清理 Mermaid mindmap 节点文本，避免特殊字符破坏语法。"""
         import re
-        # 移除 Mermaid 保留字符：()[]{};#
         cleaned = re.sub(r'[()[\]{};#]', '', text)
-        # 移除首尾空白
         cleaned = cleaned.strip()
         return cleaned or "节点"
 
@@ -282,15 +284,20 @@ class MindMap(BaseModel):
         return "\n".join(result)
 
     def to_markdown(self) -> str:
-        """转换为Markdown格式的思维导图（带层级）。"""
-        lines = [f"## {self.topic} 思维导图", ""]
-        lines.append(self._node_to_markdown(self.root, 0))
+        """转换为Markdown层级格式（markmap可解析）。"""
+        lines = [f"# {self.topic}"]
+        # 根节点与topic相同，跳过根节点本身，直接输出其子节点
+        for child in self.root.children:
+            lines.append(self._node_to_markdown(child, 2))
         return "\n".join(lines)
 
     def _node_to_markdown(self, node: MindMapNode, depth: int) -> str:
-        indent = "  " * depth
-        bullet = "-" if depth > 0 else "-"
-        result = [f"{indent}{bullet} {node.text}"]
+        prefix = "#" * min(depth + 1, 6)
+        icon_prefix = f"{node.icon} " if node.icon else ""
+        text = f"{icon_prefix}{node.text}"
+        note_suffix = f" <!-- {node.note} -->" if node.note else ""
+
+        result = [f"{prefix} {text}{note_suffix}"]
         for child in node.children:
             result.append(self._node_to_markdown(child, depth + 1))
         return "\n".join(result)

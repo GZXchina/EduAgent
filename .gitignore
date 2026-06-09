@@ -31,3 +31,12 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Audio / 生成产物
+scripts/test_tts_output.mp3
+*.mp3
+
+# 环境变量和密钥
+.env
+.env.local
+.env.*

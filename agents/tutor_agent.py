@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
@@ -466,6 +467,128 @@ class TutorAgent(BaseAgent):
         return {
             "messages": [{"role": "assistant", "content": answer}],
         }
+
+    async def run_stream(self, state: dict[str, Any]) -> AsyncIterator[str]:
+        """流式输出：逐 token 返回回答内容，减少用户等待时间。"""
+        question = self._extract_question(state)
+        profile_data = state.get("student_profile", {})
+        profile = StudentProfile(**profile_data) if profile_data else None
+        knowledge_tree = state.get("knowledge_tree", {})
+        learning_path = state.get("learning_path", {})
+        model_id = state.get("model") or None
+        conversation_history = self._extract_conversation_history(state, question)
+
+        if not question.strip():
+            yield "我没有收到你的问题，请重新输入。"
+            return
+
+        if not is_safe_question(question):
+            yield "抱歉，我无法回答涉及敏感内容的问题。请换个话题。"
+            return
+
+        if not self.spark.configured:
+            yield heuristic_answer(question)
+            return
+
+        try:
+            docs = await self.retriever.query(question, k=5)
+            async for token in self._generate_with_spark_stream(
+                question, docs, profile, knowledge_tree, learning_path, conversation_history,
+                model=model_id,
+            ):
+                yield token
+        except Exception as exc:
+            logger.warning("星火流式答疑失败，使用规则兜底: %s", exc)
+            yield heuristic_answer(question)
+
+    async def _generate_with_spark_stream(
+        self,
+        question: str,
+        docs: list[dict[str, Any]],
+        profile: StudentProfile | None,
+        knowledge_tree: dict[str, Any] | None = None,
+        learning_path: dict[str, Any] | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """流式调用星火大模型，逐 token 返回回答。"""
+        system_prompt = load_tutor_prompt()
+
+        context_parts: list[str] = []
+
+        if profile:
+            profile_lines = ["【学生画像】"]
+            profile_lines.append(f"- 知识水平：{profile.knowledge_level}")
+            profile_lines.append(f"- 学习风格：{profile.learning_style}")
+            if profile.major:
+                profile_lines.append(f"- 专业：{profile.major}")
+            if profile.goal and profile.goal != "unknown":
+                profile_lines.append(f"- 学习目标：{profile.goal}")
+            if profile.weakness:
+                profile_lines.append(f"- 薄弱点：{profile.weakness}")
+            if profile.learning_goal_text:
+                profile_lines.append(f"- 目标详情：{profile.learning_goal_text}")
+            if profile.learning_base:
+                profile_lines.append(f"- 学习基础：{profile.learning_base}")
+            context_parts.append("\n".join(profile_lines))
+
+        if docs:
+            rag_lines = ["【知识库参考内容】"]
+            for i, doc in enumerate(docs[:5], 1):
+                content = doc.get("content", "").strip()
+                if content:
+                    truncated = content[:800] + ("..." if len(content) > 800 else "")
+                    rag_lines.append(f"[片段{i}] {truncated}")
+            if len(rag_lines) > 1:
+                context_parts.append("\n".join(rag_lines))
+
+        if knowledge_tree and knowledge_tree.get("nodes"):
+            tree_lines = ["【知识结构】"]
+            tree_lines.append(f"主题：{knowledge_tree.get('topic', '未知')}")
+            for node in knowledge_tree.get("nodes", [])[:8]:
+                title = node.get("title", "")
+                children = node.get("children", [])
+                if children:
+                    tree_lines.append(f"- {title}：{', '.join(str(c) for c in children[:5])}")
+                else:
+                    tree_lines.append(f"- {title}")
+            context_parts.append("\n".join(tree_lines))
+
+        if learning_path and learning_path.get("steps"):
+            path_lines = ["【学习路径】"]
+            path_lines.append(f"路径名称：{learning_path.get('path_name', '未知')}")
+            focus = learning_path.get("focus_areas", [])
+            if focus:
+                path_lines.append(f"重点方向：{', '.join(focus)}")
+            context_parts.append("\n".join(path_lines))
+
+        context_block = "\n\n".join(context_parts) if context_parts else ""
+
+        user_prompt_parts = []
+        if context_block:
+            user_prompt_parts.append(context_block)
+            user_prompt_parts.append("---")
+
+        user_prompt_parts.append(f"【用户问题】\n{question}")
+
+        level_desc = profile.knowledge_level if profile else "intermediate"
+        user_prompt_parts.append(f"\n请根据以上信息，以{level_desc}水平来回答用户问题。")
+
+        user_prompt = "\n\n".join(user_prompt_parts)
+
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        messages.append({"role": "user", "content": user_prompt})
+
+        async for token in self.spark.chat_stream(
+            messages, temperature=0.3, max_tokens=4096, model=model,
+        ):
+            yield token
 
     def _extract_question(self, state: dict[str, Any]) -> str:
         messages = state.get("messages", [])

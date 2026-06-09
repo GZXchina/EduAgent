@@ -37,10 +37,10 @@ let progressTimer: ReturnType<typeof setInterval> | null = null
 let activeRecorder: PcmWavRecorder | null = null
 
 const voices = [
-  { key: 'x4_xiaoyan', label: '小燕', gender: '女', emoji: '👩', color: 'bg-pink-50 border-pink-200 text-pink-700', activeColor: 'ring-pink-400/30' },
-  { key: 'x4_xiaoyu', label: '小宇', gender: '男', emoji: '👨', color: 'bg-blue-50 border-blue-200 text-blue-700', activeColor: 'ring-blue-400/30' },
-  { key: 'x4_xiaoyuan', label: '小研', gender: '女', emoji: '👩‍', color: 'bg-violet-50 border-violet-200 text-violet-700', activeColor: 'ring-violet-400/30' },
-  { key: 'x4_xiaofeng', label: '小峰', gender: '男', emoji: '‍💻', color: 'bg-emerald-50 border-emerald-200 text-emerald-700', activeColor: 'ring-emerald-400/30' },
+  { key: 'x4_xiaoyan', label: '讯飞小燕', gender: '女', emoji: '👩', color: 'bg-pink-50 border-pink-200 text-pink-700', activeColor: 'ring-pink-400/30' },
+  { key: 'x4_xiaolu', label: '讯飞小露', gender: '女', emoji: '👩', color: 'bg-blue-50 border-blue-200 text-blue-700', activeColor: 'ring-blue-400/30' },
+  { key: 'x4_xujiu', label: '讯飞许久', gender: '男', emoji: '👨', color: 'bg-violet-50 border-violet-200 text-violet-700', activeColor: 'ring-violet-400/30' },
+  { key: 'x4_xiaojing', label: '讯飞小婧', gender: '女', emoji: '👩', color: 'bg-emerald-50 border-emerald-200 text-emerald-700', activeColor: 'ring-emerald-400/30' },
 ] as const
 
 const rateLabels = computed(() => {

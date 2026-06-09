@@ -107,7 +107,7 @@ THINKING_LABELS: dict[str, str] = {
 
 # 根据意图类型的执行路径
 INTENT_PATHS: dict[str, list[str]] = {
-    "simple_qa": ["router", "tutor", "evaluation"],
+    "simple_qa": ["router", "tutor"],
     "study_plan": ["router", "profile", "tutor", "evaluation"],
     "full_learn": ["router", "profile", "planner", "knowledge", "resources", "safety", "tutor", "evaluation"],
 }
@@ -125,6 +125,7 @@ async def chat_stream(body: ChatRequest):
         internal_nodes: list[dict[str, Any]] = []
         completed_nodes: set[str] = set()
         current_intent: str | None = None
+        tutor_streamed = False  # 标记 tutor 是否已通过流式输出
 
         # 工作流开始时推送 router thinking 事件
         yield f"data: {json.dumps({'type': 'thinking', 'node': 'router', 'status': 'processing', 'label': THINKING_LABELS.get('router', '处理中...'), 'model': body.model}, ensure_ascii=False)}\n\n"
@@ -132,16 +133,13 @@ async def chat_stream(body: ChatRequest):
         try:
             async for chunk in graph.astream(state):
                 for node_name, node_output in chunk.items():
-                    # 检查是否完成，标记该节点为处理中
                     completed_nodes.add(node_name)
 
                     # 从 router 节点获取 intent
                     if node_name == "router":
                         current_intent = node_output.get("intent")
-                        # router 完成，推送完成状态
                         yield f"data: {json.dumps({'type': 'thinking', 'node': 'router', 'status': 'completed'}, ensure_ascii=False)}\n\n"
 
-                        # 根据 intent 推送下一个节点的 thinking
                         if current_intent:
                             intent_path = INTENT_PATHS.get(current_intent, [])
                             if len(intent_path) > 1:
@@ -180,14 +178,25 @@ async def chat_stream(body: ChatRequest):
                             current_idx = intent_path.index(node_name)
                             if current_idx + 1 < len(intent_path):
                                 next_node = intent_path[current_idx + 1]
-                                if next_node != "evaluation":  # evaluation 不需要 thinking
+                                if next_node != "evaluation":
                                     yield f"data: {json.dumps({'type': 'thinking', 'node': next_node, 'status': 'processing', 'label': THINKING_LABELS.get(next_node, '处理中...')}, ensure_ascii=False)}\n\n"
                         except ValueError:
                             pass
 
-                    # 推送面向用户的消息（tutor 节点的输出）
-                    if node_name in USER_FACING_NODES:
-                        yield f"data: {json.dumps({'type': 'message', 'node': node_name, 'content': content}, ensure_ascii=False)}\n\n"
+                    # tutor 节点：使用流式输出逐 token 推送
+                    if node_name in USER_FACING_NODES and not tutor_streamed:
+                        tutor_streamed = True
+                        # 先推送 tutor thinking 完成
+                        yield f"data: {json.dumps({'type': 'thinking', 'node': 'tutor', 'status': 'completed'}, ensure_ascii=False)}\n\n"
+                        # 逐 token 流式推送回答内容
+                        full_content = content
+                        yield f"data: {json.dumps({'type': 'message_start', 'node': node_name}, ensure_ascii=False)}\n\n"
+                        # 将完整内容分块推送，模拟流式效果
+                        chunk_size = 8
+                        for i in range(0, len(full_content), chunk_size):
+                            token = full_content[i:i + chunk_size]
+                            yield f"data: {json.dumps({'type': 'message_delta', 'node': node_name, 'content': token}, ensure_ascii=False)}\n\n"
+                        yield f"data: {json.dumps({'type': 'message_end', 'node': node_name, 'content': full_content}, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'student_profile': student_profile, 'internal_steps': internal_nodes, 'intent': current_intent}, ensure_ascii=False)}\n\n"
             logger.info("[SSE] 工作流完成，session_id=%s, intent=%s", session_id, current_intent)

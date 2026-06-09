@@ -206,7 +206,6 @@ class PlannerAgent(BaseAgent):
             "learning_path": learning_path.model_dump(),
             "messages": [
                 {"role": "assistant", "content": path_summary},
-                {"role": "assistant", "content": learning_path.to_markdown()}
             ],
         }
     

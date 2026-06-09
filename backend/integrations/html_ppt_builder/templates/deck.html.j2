@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="{{ theme_name }}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280,initial-scale=1">
+<title>{{ deck.topic }}</title>
+<style>{{ base_css }}</style>
+<style>{{ theme_css }}</style>
+<style>{{ fonts_css }}</style>
+<style>{{ anim_css }}</style>
+<style>
+  /* 教育场景增强样式 */
+  .slide-cover {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .slide-cover h1 {
+    font-size: 64px;
+    line-height: 1.1;
+    margin-bottom: 24px;
+  }
+  .slide-cover .subtitle {
+    font-size: 24px;
+    color: var(--text-2);
+    font-weight: 300;
+    max-width: 60ch;
+  }
+  .slide-content {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    padding-top: 80px;
+  }
+  .slide-content h2 {
+    margin-bottom: 32px;
+  }
+  .slide-content .points {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .slide-content .points li {
+    font-size: 22px;
+    line-height: 1.8;
+    color: var(--text-2);
+    padding-left: 24px;
+    position: relative;
+  }
+  .slide-content .points li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 14px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .slide-end {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .slide-end h2 {
+    font-size: 48px;
+    margin-bottom: 20px;
+  }
+  .slide-end .summary {
+    font-size: 20px;
+    color: var(--text-2);
+    max-width: 60ch;
+  }
+  /* iframe 预览适配 */
+  body.preview-mode .deck-header,
+  body.preview-mode .deck-footer,
+  body.preview-mode .progress-bar {
+    display: none !important;
+  }
+</style>
+</head>
+<body>
+<div class="deck">
+  <header class="deck-header">
+    <span>{{ deck.topic }}</span>
+    <span class="slide-number" data-current="1" data-total="{{ deck.total_slides }}"></span>
+  </header>
+
+  {% for item in slides_with_layout %}
+  <section class="slide {% if item.is_first %}is-active{% endif %}"
+           data-title="{{ item.slide.title }}"
+           data-anim="fade-up">
+
+    {% if item.layout == 'cover' %}
+    <div class="slide-cover">
+      <h1 class="title">{{ item.slide.title }}</h1>
+      {% if item.slide.content %}
+      <p class="subtitle">{{ item.slide.content | join(' · ') }}</p>
+      {% endif %}
+    </div>
+
+    {% elif item.layout == 'end' %}
+    <div class="slide-end">
+      <h2 class="title">{{ item.slide.title }}</h2>
+      {% if item.slide.content %}
+      <p class="summary">{{ item.slide.content | join('，') }}</p>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <div class="slide-content">
+      <h2 class="title">{{ item.slide.title }}</h2>
+      {% if item.slide.content %}
+      <ul class="points anim-stagger-list">
+        {% for point in item.slide.content %}
+        <li>{{ point }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if with_presenter and item.slide.notes %}
+    <div class="notes">{{ item.slide.notes }}</div>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <footer class="deck-footer">
+    <span>{{ deck.topic }}</span>
+    <span>按 ← → 翻页 · F 全屏 · T 切换主题{% if with_presenter %} · S 演讲者模式{% endif %}</span>
+  </footer>
+</div>
+
+<div class="progress-bar"><span></span></div>
+<div class="notes-overlay"></div>
+<div class="overview"></div>
+
+<script>{{ runtime_js }}</script>
+</body>
+</html>

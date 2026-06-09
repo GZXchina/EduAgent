@@ -330,11 +330,24 @@ async def _node_loop_back(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _route_after_tutor(state: AgentState) -> str:
+    """根据意图决定 tutor 之后的路径。
+
+    - simple_qa → 直接结束（跳过 evaluation，快速响应）
+    - study_plan → 轻量规则评估（不调 LLM）
+    - full_learn → 完整评估
+    """
+    intent = state.get("intent", INTENT_SIMPLE_QA)
+    if intent == INTENT_SIMPLE_QA:
+        return "end"
+    return "evaluation"
+
+
 def build_workflow():
     """智能路由工作流：根据问题类型决定执行路径。
 
     执行路径：
-    - simple_qa（简单问答）: router → tutor → evaluation → END
+    - simple_qa（简单问答）: router → tutor → END（跳过评估，极速响应）
     - study_plan（学习规划）: router → profile → tutor → evaluation → END
     - full_learn（完整学习）: router → profile → planner → knowledge → resources → safety → tutor → evaluation → END
     """
@@ -380,8 +393,12 @@ def build_workflow():
     g.add_edge("resources", "safety")
     g.add_edge("safety", "tutor")
 
-    # tutor → evaluation（所有路径都经过评估）
-    g.add_edge("tutor", "evaluation")
+    # tutor → 根据意图决定是否评估
+    g.add_conditional_edges(
+        "tutor",
+        _route_after_tutor,
+        {"evaluation": "evaluation", "end": END},
+    )
 
     # evaluation → 根据分数决定是否回流
     g.add_conditional_edges(

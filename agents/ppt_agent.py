@@ -1,3 +1,12 @@
+"""
+PPT生成Agent：根据学习主题生成Markdown课件结构。
+
+架构说明：
+- 本Agent用于多智能体工作流中生成PPT内容（JSON/Markdown格式）
+- 实际PPT文件（.pptx）生成通过 /api/aippt/generate 接口，调用讯飞智文PPT v2 API
+- 流程：用户提示词 → 非PPT对话模型优化 → 讯飞智文API生成PPT文件
+- 本Agent与讯飞智文API是互补关系，非替代关系
+"""
 from __future__ import annotations
 
 import logging

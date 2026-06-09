@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     tts_api_secret: str = ""
     tts_ws_url: str = "wss://tts-api.xfyun.cn/v2/tts"
 
+    # 讯飞智文 PPT 生成
+    aippt_app_id: str = ""
+    aippt_api_secret: str = ""
+
     # RAG
     knowledge_dir: str = "./knowledge"
     chroma_persist_dir: str = "./vector_db/chroma"

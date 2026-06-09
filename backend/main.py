@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import auth, chat, custom_models, evaluation, health, learning_path, profile, progress, rag, recommend, resource_generate, resources, video, voice, workflow
+from api.routes import aippt, auth, chat, custom_models, evaluation, health, learning_path, profile, progress, rag, recommend, resource_generate, resources, video, voice, workflow
 from backend.core.logging_config import setup_logging
 from backend.core.redis_client import get_redis
 from backend.settings import get_settings
@@ -59,6 +59,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 app.include_router(health.router)
@@ -75,4 +76,5 @@ app.include_router(resource_generate.router)
 app.include_router(video.router)
 app.include_router(progress.router)
 app.include_router(recommend.router)
+app.include_router(aippt.router)
 app.include_router(workflow.router)

@@ -81,7 +81,6 @@ class KnowledgeAgent(BaseAgent):
             "knowledge_tree": knowledge_tree,
             "messages": [
                 {"role": "assistant", "content": f"【知识拆解】{knowledge_tree['topic']} | 包含{len(knowledge_tree['nodes'])}个主要节点（来源: {source}）"},
-                {"role": "assistant", "content": self._format_tree_markdown(knowledge_tree)}
             ],
         }
 

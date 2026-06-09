@@ -26,14 +26,8 @@ class ProfileAgent(BaseAgent):
         finally:
             db.close()
 
-        summary = (
-            f"【学生画像】专业={profile.major or '未填'} | "
-            f"水平={profile.knowledge_level} | 风格={profile.learning_style} | "
-            f"目标={profile.goal} | 薄弱={profile.weakness or '待发现'} | "
-            f"时长={profile.study_time}（来源: {source}）"
-        )
         return {
             "session_id": session_id,
             "student_profile": payload,
-            "messages": [{"role": "assistant", "content": summary}],
+            "messages": [],
         }

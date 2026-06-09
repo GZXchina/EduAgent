@@ -133,15 +133,15 @@ class MindMapRequest(BaseModel):
 
 class MindMapResponse(BaseModel):
     topic: str
-    mermaid_code: str = Field(description="Mermaid mindmap 代码")
-    markdown: str = Field(description="Markdown 层级文本")
+    markdown: str = Field(description="Markdown 层级文本（markmap主渲染源）")
+    mermaid_code: str = Field(default="", description="Mermaid mindmap 代码（兼容保留）")
     source: str = Field(description="spark | heuristic")
     message: str = Field(description="生成状态说明")
 
 
 @router.post("/mindmap", response_model=MindMapResponse)
 async def generate_mindmap(body: MindMapRequest) -> MindMapResponse:
-    """生成思维导图：调用 MindMapAgent 返回 Mermaid 代码 + Markdown。"""
+    """生成思维导图：调用 MindMapAgent 返回 Markdown + Mermaid 代码。"""
     agent = MindMapAgent()
     state: dict[str, Any] = {
         "user_input": body.topic,
@@ -155,7 +155,16 @@ async def generate_mindmap(body: MindMapRequest) -> MindMapResponse:
         raise HTTPException(status_code=500, detail=f"思维导图生成失败: {exc}") from exc
 
     mindmap_data = result.get("mindmap", {})
+    markdown = result.get("mindmap_markdown", "")
     mermaid_code = result.get("mindmap_mermaid", "")
+
+    if not markdown and mindmap_data:
+        from schemas.profile import MindMap
+        try:
+            mm = MindMap.model_validate(mindmap_data)
+            markdown = mm.to_markdown()
+        except Exception:
+            markdown = f"# {body.topic}"
 
     if not mermaid_code and mindmap_data:
         from schemas.profile import MindMap
@@ -165,19 +174,10 @@ async def generate_mindmap(body: MindMapRequest) -> MindMapResponse:
         except Exception:
             mermaid_code = "mindmap\n  " + body.topic
 
-    markdown = ""
-    if mindmap_data:
-        from schemas.profile import MindMap
-        try:
-            mm = MindMap.model_validate(mindmap_data)
-            markdown = mm.to_markdown()
-        except Exception:
-            markdown = ""
-
     return MindMapResponse(
         topic=body.topic,
-        mermaid_code=mermaid_code,
         markdown=markdown,
+        mermaid_code=mermaid_code,
         source=mindmap_data.get("source", "heuristic"),
         message=f"思维导图「{body.topic}」已生成",
     )

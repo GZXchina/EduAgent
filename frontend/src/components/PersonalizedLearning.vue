@@ -24,7 +24,7 @@ const activeTab = ref<'profile' | 'path'>('profile')
 /* ------------------------------------------------------------------ */
 
 interface ModelStatus {
-  status: 'connected' | 'disconnected' | 'timeout' | 'error' | 'checking'
+  status: 'connected' | 'disconnected' | 'timeout' | 'error' | 'checking' | 'offline'
   model_label: string
   latency_ms: number | null
   fallback_mode: boolean

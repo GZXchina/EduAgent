@@ -13,6 +13,7 @@
 import { ref, nextTick, watch, onBeforeUnmount, onMounted } from 'vue'
 import { marked } from 'marked'
 import mermaid from 'mermaid'
+import { createPcmWavRecorder, type PcmWavRecorder } from '../utils/audioRecorder'
 
 interface InternalStep {
   node: string
@@ -28,6 +29,8 @@ interface ChatMessage {
   liked?: boolean
   internalSteps?: InternalStep[]
   sessionId?: string
+  isStreaming?: boolean  // 标记当前消息是否正在流式输出中
+  renderedHtml?: string // 流式完成后缓存的渲染结果，避免重复渲染
 }
 
 const message = ref('')
@@ -112,9 +115,8 @@ let statusCheckTimer: ReturnType<typeof setInterval> | null = null
 
 const isRecording = ref(false)
 const recordingDuration = ref(0)
-let mediaRecorder: MediaRecorder | null = null
 let recordingTimer: ReturnType<typeof setInterval> | null = null
-let audioChunks: Blob[] = []
+let activeRecorder: PcmWavRecorder | null = null
 
 const uploadingFile = ref(false)
 const uploadMsg = ref('')
@@ -422,6 +424,7 @@ async function sendMessage() {
     content: '',
     timestamp: Date.now(),
     internalSteps: [],
+    isStreaming: true,
   }
   messages.value.push(aiMsg)
 
@@ -502,6 +505,28 @@ async function sendMessage() {
             scrollToBottom()
           }
 
+          // 流式消息：逐 token 推送
+          if (data.type === 'message_start') {
+            currentThinkingLabel.value = ''
+            currentThinkingNode.value = ''
+            aiMsg.content = ''
+            await nextTick()
+            scrollToBottom()
+          }
+
+          if (data.type === 'message_delta' && data.content) {
+            aiMsg.content += data.content
+            await nextTick()
+            scrollToBottom()
+          }
+
+          if (data.type === 'message_end' && data.content) {
+            // 用完整内容替换，确保一致性
+            aiMsg.content = data.content
+            await nextTick()
+            scrollToBottom()
+          }
+
           if (data.type === 'done') {
             currentThinkingLabel.value = ''
             currentThinkingNode.value = ''
@@ -533,6 +558,9 @@ async function sendMessage() {
   } finally {
     loading.value = false
     streaming.value = false
+    // 流式完成：缓存渲染结果，标记非流式，避免后续轮次重复渲染
+    aiMsg.isStreaming = false
+    aiMsg.renderedHtml = renderMarkdown(aiMsg.content)
     await nextTick()
     scrollToBottom()
     await renderPendingMermaidBlocks()
@@ -560,6 +588,7 @@ async function regenerate(_msg: ChatMessage, idx: number) {
     content: '',
     timestamp: Date.now(),
     internalSteps: [],
+    isStreaming: true,
   }
   messages.value.push(aiMsg)
 
@@ -623,6 +652,27 @@ async function regenerate(_msg: ChatMessage, idx: number) {
             scrollToBottom()
           }
 
+          // 流式消息：逐 token 推送
+          if (data.type === 'message_start') {
+            currentThinkingLabel.value = ''
+            currentThinkingNode.value = ''
+            aiMsg.content = ''
+            await nextTick()
+            scrollToBottom()
+          }
+
+          if (data.type === 'message_delta' && data.content) {
+            aiMsg.content += data.content
+            await nextTick()
+            scrollToBottom()
+          }
+
+          if (data.type === 'message_end' && data.content) {
+            aiMsg.content = data.content
+            await nextTick()
+            scrollToBottom()
+          }
+
           if (data.type === 'done') {
             currentThinkingLabel.value = ''
             currentThinkingNode.value = ''
@@ -656,6 +706,8 @@ async function regenerate(_msg: ChatMessage, idx: number) {
   } finally {
     loading.value = false
     streaming.value = false
+    aiMsg.isStreaming = false
+    aiMsg.renderedHtml = renderMarkdown(aiMsg.content)
     await nextTick()
     scrollToBottom()
     await renderPendingMermaidBlocks()
@@ -791,27 +843,7 @@ async function startRecording() {
   }
 
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    audioChunks = []
-
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm'
-
-    mediaRecorder = new MediaRecorder(stream, { mimeType })
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.push(e.data)
-    }
-
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop())
-      if (audioChunks.length === 0) return
-
-      const audioBlob = new Blob(audioChunks, { type: mimeType })
-      await sendAudioForASR(audioBlob)
-    }
-
-    mediaRecorder.start()
+    activeRecorder = await createPcmWavRecorder()
     isRecording.value = true
     recordingDuration.value = 0
 
@@ -827,14 +859,28 @@ async function startRecording() {
   }
 }
 
-function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop()
-  }
+async function stopRecording() {
   isRecording.value = false
   if (recordingTimer) {
     clearInterval(recordingTimer)
     recordingTimer = null
+  }
+
+  const recorder = activeRecorder
+  activeRecorder = null
+  if (!recorder) return
+
+  try {
+    const audioBlob = await recorder.stop()
+    if (audioBlob.size === 0) {
+      actionFeedback.value = '未录制到语音内容'
+      setTimeout(() => { actionFeedback.value = '' }, 2000)
+      return
+    }
+    await sendAudioForASR(audioBlob)
+  } catch (e) {
+    actionFeedback.value = e instanceof Error ? e.message : '语音识别失败，请重试'
+    setTimeout(() => { actionFeedback.value = '' }, 3000)
   }
 }
 
@@ -919,9 +965,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop()
-  }
+  if (activeRecorder) activeRecorder.cancel().catch(() => {})
   if (recordingTimer) {
     clearInterval(recordingTimer)
   }
@@ -1053,8 +1097,8 @@ onBeforeUnmount(() => {
             </div>
             <div class="flex-1 min-w-0">
               <div class="rounded-2xl rounded-bl-md bg-white border border-surface-200 px-4 py-3 shadow-sm">
-                <!-- 实时思考过程指示器 -->
-                <div v-if="loading && streaming && msg.content === '' && (currentThinkingLabel || thinkingSteps.length > 0)" class="py-1">
+                <!-- 实时思考过程指示器：仅当前流式消息显示 -->
+                <div v-if="msg.isStreaming && loading && streaming && msg.content === '' && (currentThinkingLabel || thinkingSteps.length > 0)" class="py-1">
                   <!-- 思考步骤进度条 -->
                   <div class="space-y-1.5 mb-3">
                     <div
@@ -1086,17 +1130,17 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <!-- 加载骨架屏（无 thinking 信息时的默认加载态） -->
-                <div v-else-if="loading && !streaming && msg.content === ''" class="space-y-2.5 py-1">
+                <!-- 加载骨架屏（仅当前流式消息且无 thinking 信息时显示） -->
+                <div v-else-if="msg.isStreaming && loading && !streaming && msg.content === ''" class="space-y-2.5 py-1">
                   <div class="skeleton h-3 w-3/4" />
                   <div class="skeleton h-3 w-full" />
                   <div class="skeleton h-3 w-5/6" />
                   <div class="skeleton h-3 w-2/3" />
                 </div>
 
-                <!-- 流式生成中的 thinking 指示器（已有部分内容时显示在顶部） -->
+                <!-- 流式生成中的 thinking 指示器（仅当前流式消息已有部分内容时显示在顶部） -->
                 <div
-                  v-if="loading && streaming && currentThinkingLabel && msg.content"
+                  v-if="msg.isStreaming && loading && streaming && currentThinkingLabel && msg.content"
                   class="flex items-center gap-2 text-xs text-brand-500 mb-2 pb-2 border-b border-surface-100"
                 >
                   <svg class="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -1106,15 +1150,22 @@ onBeforeUnmount(() => {
                 </div>
 
                 <!-- Markdown 主回复 -->
+                <!-- 已完成的消息：使用缓存的 HTML，避免重复渲染闪烁 -->
                 <div
-                  v-else
+                  v-if="!msg.isStreaming && msg.renderedHtml"
+                  class="markdown-body text-sm leading-relaxed text-surface-700"
+                  v-html="msg.renderedHtml"
+                />
+                <!-- 正在流式输出的消息：实时渲染 -->
+                <div
+                  v-else-if="msg.content"
                   class="markdown-body text-sm leading-relaxed text-surface-700"
                   v-html="renderMarkdown(msg.content)"
                 />
 
-                <!-- 打字机光标 -->
+                <!-- 打字机光标：仅当前正在流式输出的消息显示 -->
                 <span
-                  v-if="streaming && idx === messages.length - 1"
+                  v-if="msg.isStreaming && streaming && idx === messages.length - 1"
                   class="inline-block w-1.5 h-4 bg-brand-500 rounded-sm ml-0.5 animate-pulse align-middle"
                 />
               </div>
@@ -1147,7 +1198,7 @@ onBeforeUnmount(() => {
               </div>
 
               <!-- 操作按钮 -->
-              <div v-if="msg.content && !streaming" class="flex items-center gap-1 mt-2 ml-1">
+              <div v-if="msg.content && !msg.isStreaming" class="flex items-center gap-1 mt-2 ml-1">
                 <button
                   type="button"
                   class="w-7 h-7 rounded-lg flex items-center justify-center text-surface-300 hover:text-brand-500 hover:bg-brand-50 transition-colors"

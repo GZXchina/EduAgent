@@ -13,6 +13,7 @@
 - [api/routes/resources.py](file://api/routes/resources.py)
 - [api/routes/progress.py](file://api/routes/progress.py)
 - [api/routes/workflow.py](file://api/routes/workflow.py)
+- [api/routes/aippt.py](file://api/routes/aippt.py)
 - [schemas/profile.py](file://schemas/profile.py)
 - [scripts/test_chat_api.py](file://scripts/test_chat_api.py)
 </cite>
@@ -77,11 +78,13 @@ EV["学习评估<br/>/evaluation/*"]
 RS["资源生成<br/>/api/resources/*"]
 PG["学习进度<br/>/api/progress/*"]
 WF["工作流编排<br/>/api/workflow/*"]
+AP["PPT生成<br/>/api/aippt/*"]
 end
 DB["数据库"]
 RC["Redis 缓存"]
 VS["向量数据库/嵌入模型"]
 SP["讯飞服务Spark/ASR/TTS"]
+XF["讯飞智文PPT API"]
 H --> DB
 H --> RC
 CH --> WF
@@ -97,6 +100,8 @@ VO --> SP
 EV --> DB
 RS --> DB
 PG --> DB
+AP --> SP
+AP --> XF
 ```
 
 图表来源
@@ -269,14 +274,71 @@ PG --> DB
 章节来源
 - [api/routes/workflow.py:54-120](file://api/routes/workflow.py#L54-L120)
 
+### 思维导图生成
+- 生成思维导图
+  - 方法：POST
+  - 路径：/api/workflow/mindmap
+  - 请求体：topic（字符串，必填）、session_id（字符串，可选）、model（字符串，可选）
+  - 响应体：topic、markdown（Markdown层级文本，markmap主渲染源）、mermaid_code（Mermaid代码，兼容保留）、source（spark | heuristic）、message
+  - 行为：AI生成思维导图结构 → 输出Markdown（含icon/note）+ Mermaid（兼容）
+  - 错误码：500 生成失败
+
+章节来源
+- [api/routes/workflow.py:125-183](file://api/routes/workflow.py#L125-L183)
+
+### PPT生成（三种模式）
+
+#### 在线模式（讯飞智文API）
+- 生成PPT
+  - 方法：POST
+  - 路径：/api/aippt/generate
+  - 请求体：query（字符串，必填）、optimize_model（字符串，可选）、optimize_prompt（布尔）、author（字符串）、is_card_note（布尔）、search（布尔）、is_figure（布尔）、ai_image（字符串）
+  - 响应体：sid（任务ID）、status、total_pages、done_pages、ppt_url、cover_img、optimized_query
+  - 错误码：400 生成失败
+- 查询进度
+  - 方法：POST
+  - 路径：/api/aippt/progress
+  - 请求体：sid（字符串，必填）
+  - 响应体：sid、status（done/building/failed）、ppt_status、ai_image_status、card_note_status、total_pages、done_pages、ppt_url、cover_img、progress_percent
+- 获取模板列表
+  - 方法：GET
+  - 路径：/api/aippt/templates
+  - 响应体：templates（列表，含id、name、preview_url等）
+
+#### 本地模式（python-pptx）
+- 生成本地PPT
+  - 方法：POST
+  - 路径：/api/aippt/generate-local
+  - 请求体：query（字符串，必填）、model（字符串，可选）、theme（字符串，默认default）
+  - 响应：二进制 .pptx 文件，带 Content-Disposition 下载头
+  - 错误码：400/500 生成失败
+
+#### HTML演示模式（html-ppt-skill）
+- 生成HTML演示
+  - 方法：POST
+  - 路径：/api/aippt/generate-html
+  - 请求体：query（字符串，必填）、model（字符串，可选）、theme（字符串，默认corporate-clean）、with_presenter（布尔，默认false）
+  - 响应体：html（完整HTML字符串）、topic（字符串）、total_slides（整数）、theme（字符串）
+  - 行为：AI生成PPTDeck内容 → html-ppt-skill渲染为可交互HTML（CSS/JS全内联）
+  - 错误码：500 内容生成或渲染失败
+- 获取HTML主题列表
+  - 方法：GET
+  - 路径：/api/aippt/html-themes
+  - 响应体：themes（列表，含id和label）
+  - 可用主题：corporate-clean（企业商务）、academic-paper（学术论文）、tokyo-night（东京暗夜）、blueprint（蓝图工程）、soft-pastel（柔和马卡龙）、xiaohongshu-white（小红书白底）、minimal-white（极简白）、dracula（Dracula暗色）
+
+章节来源
+- [api/routes/aippt.py:395-568](file://api/routes/aippt.py#L395-L568)
+- [backend/integrations/html_ppt_builder/renderer.py](file://backend/integrations/html_ppt_builder/renderer.py)
+
 ## 依赖分析
 - 应用生命周期
   - 初始化日志、数据库、Redis
   - 可选：启动时批量知识入库
 - 路由注册
-  - 健康检查、对话学习、RAG、画像、语音、评估、资源、进度、工作流
+  - 健康检查、对话学习、RAG、画像、语音、评估、资源、进度、工作流、PPT生成
 - 外部依赖
-  - 讯飞（WebSocket/HTTP）、ASR、TTS
+  - 讯飞（WebSocket/HTTP）、ASR、TTS、智文PPT v2 API
   - 向量数据库（Chroma）、嵌入模型
   - Redis 缓存
 

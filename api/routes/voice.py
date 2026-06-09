@@ -18,7 +18,7 @@ _voice = get_voice_service()
 @router.post("/asr")
 async def asr_endpoint(
     audio: Annotated[UploadFile, File(description="语音文件")],
-    format: Annotated[str, Form(description="音频格式，wav/mp3/pcm")] = "wav",
+    format: Annotated[str, Form(description="音频格式，支持16kHz单声道16bit wav/pcm")] = "wav",
 ) -> dict[str, str]:
     """语音识别：接收语音文件，返回识别文字。"""
     try:

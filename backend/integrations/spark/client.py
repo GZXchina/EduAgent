@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import AsyncIterator
 from functools import lru_cache
 from typing import Any
 
@@ -344,6 +345,101 @@ class SparkClient:
         except Exception as exc:
             logger.warning("加载自定义模型 %s 失败: %s", model_id, exc)
         return None
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        """流式输出：逐 token 返回模型响应，仅支持 HTTP 协议模型。
+
+        对于 WebSocket 模型，回退到非流式 chat 并一次性 yield 结果。
+        """
+        if not self.configured:
+            raise RuntimeError(
+                "讯飞星火未配置：请在 .env 中设置 SPARK_APP_ID / SPARK_API_KEY / SPARK_API_SECRET"
+            )
+
+        s = self.settings
+        model_id = model or s.spark_model
+        model_cfg = AVAILABLE_MODELS.get(model_id)
+
+        if not model_cfg and model_id and model_id.startswith("custom-"):
+            model_cfg = self._load_custom_model(model_id)
+
+        # 判断是否为 HTTP 模型
+        is_http = False
+        custom_api_url = None
+        custom_api_key = None
+        actual_model = model_id
+
+        if model_cfg and model_cfg.get("protocol") == "http":
+            is_http = True
+            custom_api_url = model_cfg.get("api_url")
+            custom_api_key = model_cfg.get("api_key")
+            actual_model = model_cfg.get("model", model_id)
+        elif not model_cfg:
+            if self._use_http():
+                is_http = True
+                custom_api_url = s.spark_api_url
+                actual_model = s.spark_model
+            elif self._use_websocket():
+                # WebSocket 不支持流式，回退到完整响应
+                result = await self.chat(messages, temperature=temperature, max_tokens=max_tokens, model=model)
+                yield result
+                return
+
+        if not is_http:
+            # 非 HTTP 模型回退
+            result = await self.chat(messages, temperature=temperature, max_tokens=max_tokens, model=model)
+            yield result
+            return
+
+        # HTTP 流式请求
+        final_api_url = custom_api_url or s.spark_api_url
+        payload = {
+            "model": actual_model,
+            "messages": self._to_spark_text(messages),
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        if custom_api_key:
+            auth_headers = {"Authorization": f"Bearer {custom_api_key}"}
+        else:
+            auth_headers = self._auth_header()
+        headers = {**auth_headers, "Content-Type": "application/json"}
+
+        logger.info("星火 HTTP 流式请求: url=%s, model=%s", final_api_url, actual_model)
+
+        async with httpx.AsyncClient(timeout=s.spark_timeout) as client:
+            async with client.stream("POST", final_api_url, json=payload, headers=headers) as resp:
+                if resp.status_code != 200:
+                    error_text = await resp.aread()
+                    raise RuntimeError(
+                        f"星火 HTTP 流式请求失败 (status={resp.status_code}): {error_text.decode()[:300]}"
+                    )
+                async for line in resp.aiter_lines():
+                    line = line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:"):].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        choices = chunk.get("choices") or []
+                        if choices:
+                            delta = choices[0].get("delta") or {}
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                    except json.JSONDecodeError:
+                        continue
 
     async def chat_json(
         self,

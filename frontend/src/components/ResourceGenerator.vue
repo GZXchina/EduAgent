@@ -6,16 +6,19 @@
  * 1. 卡片化网格布局：5 种资源类型卡片，含图标 + 预览缩略图 + 状态标签 + 快捷操作
  * 2. 实时进度条：模拟生成步骤指示器，避免白屏等待
  * 3. 代码案例：marked + highlight.js 语法高亮，一键复制按钮
- * 4. 思维导图：mermaid 实时渲染，支持缩放拖拽（pan/zoom）
+ * 4. 思维导图：markmap 交互式渲染，支持缩放/拖拽/折叠/导出
  * 5. PPT/题库/视频脚本：结构化卡片呈现 + 导出复制
  * 6. 浅色主题适配 + 骨架屏 + 空状态引导
  * 7. 保持原有 /api/chat API 调用逻辑不变
  *
- * 依赖安装：npm install mermaid
+ * 依赖安装：npm install markmap-lib markmap-view markmap-toolbar
  */
 import { ref, nextTick, onBeforeUnmount, watch, onMounted } from 'vue'
 import { marked } from 'marked'
-import mermaid from 'mermaid'
+import { Transformer } from 'markmap-lib'
+import { Markmap } from 'markmap-view'
+import { Toolbar } from 'markmap-toolbar'
+import 'markmap-toolbar/dist/style.css'
 import VideoPlayer from './VideoPlayer.vue'
 
 const topic = ref('Python循环语句')
@@ -25,9 +28,10 @@ const result = ref('')
 const loading = ref(false)
 const error = ref('')
 const actionFeedback = ref('')
-const mermaidContainerRef = ref<HTMLDivElement | null>(null)
-const mermaidRenderFailed = ref(false)
-const mermaidCode = ref('')
+const markmapContainerRef = ref<SVGSVGElement | null>(null)
+const markmapInstance = ref<Markmap | null>(null)
+const markmapToolbarRef = ref<HTMLDivElement | null>(null)
+const mindmapMarkdown = ref('')
 
 async function trackBehavior(action: string, detail: Record<string, unknown> = {}) {
   if (!sessionId.value) return
@@ -87,6 +91,70 @@ interface VideoGenerateData {
 const videoData = ref<VideoGenerateData | null>(null)
 const videoError = ref('')
 
+// ========== PPT 生成状态 ==========
+interface PPTProgressInfo {
+  sid: string
+  status: 'done' | 'building' | 'failed'
+  ppt_status: string
+  ai_image_status: string
+  card_note_status: string
+  total_pages: number
+  done_pages: number
+  ppt_url: string
+  cover_img: string
+  progress_percent: number
+}
+
+const pptProgress = ref<PPTProgressInfo | null>(null)
+const pptTaskId = ref('')
+const pptQueryUsed = ref('')
+const pptMode = ref<'online' | 'local' | 'html'>('online') // PPT生成模式
+const pptTheme = ref<'default' | 'dark' | 'education'>('default') // 本地模式主题
+
+// ========== HTML PPT 演示状态 ==========
+const htmlTheme = ref('corporate-clean')
+const htmlContent = ref('')
+const htmlPreviewReady = ref(false)
+const htmlThemes = ref<{ id: string; label: string }[]>([
+  { id: 'corporate-clean', label: '企业商务' },
+  { id: 'academic-paper', label: '学术论文' },
+  { id: 'tokyo-night', label: '东京暗夜' },
+  { id: 'blueprint', label: '蓝图工程' },
+  { id: 'soft-pastel', label: '柔和马卡龙' },
+  { id: 'xiaohongshu-white', label: '小红书白底' },
+  { id: 'minimal-white', label: '极简白' },
+  { id: 'dracula', label: 'Dracula暗色' },
+])
+let progressPollTimer: ReturnType<typeof setInterval> | null = null
+let progressPollCount = 0
+let progressErrorCount = 0
+const MAX_PROGRESS_POLL = 100 // 最多轮询100次（约5分钟）
+const MAX_PROGRESS_ERRORS = 3 // 连续错误3次后停止轮询
+
+// ========== PPT 预览状态 ==========
+interface PPTOutlineChapter {
+  chapterTitle?: string
+  title?: string
+  chapterSections?: PPTOutlineSection[]
+  sections?: PPTOutlineSection[]
+  [key: string]: unknown
+}
+interface PPTOutlineSection {
+  sectionTitle?: string
+  title?: string
+  [key: string]: unknown
+}
+interface PPTOutlineData {
+  title: string
+  sub_title: string
+  outline: string
+  outline_parsed: PPTOutlineChapter[]
+}
+const showPPTPreview = ref(false)
+const pptOutline = ref<PPTOutlineData | null>(null)
+const pptPreviewLoading = ref(false)
+const pptPreviewError = ref('')
+
 // ========== AI 模型选择 ==========
 interface ModelOption {
   id: string
@@ -98,6 +166,7 @@ interface ModelOption {
 const availableModels = ref<ModelOption[]>([])
 const selectedModel = ref('Spark-X2-Flash')
 const showModelDropdown = ref(false)
+const modelDropdownRef = ref<HTMLDivElement | null>(null)
 
 // 自定义模型表单
 const showAddModelModal = ref(false)
@@ -328,16 +397,64 @@ function renderMarkdown(text: string): string {
   try { return marked.parse(text) as string } catch { return escapeHtml(text) }
 }
 
-async function renderMermaidDiagram(code: string) {
-  if (!mermaidContainerRef.value) return
-  mermaidRenderFailed.value = false
+async function renderMarkmap(markdown: string) {
+  if (!markmapContainerRef.value) return
   try {
-    const id = `mermaid-diagram-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-    const { svg } = await mermaid.render(id, code)
-    mermaidContainerRef.value.innerHTML = svg
-  } catch {
-    mermaidRenderFailed.value = true
+    const transformer = new Transformer()
+    const { root } = transformer.transform(markdown)
+
+    if (markmapInstance.value) {
+      markmapInstance.value.setData(root)
+      markmapInstance.value.fit()
+    } else {
+      markmapInstance.value = Markmap.create(markmapContainerRef.value, {
+        autoFit: true,
+        duration: 300,
+        padding: 20,
+      }, root)
+
+      // 挂载工具栏
+      if (markmapToolbarRef.value) {
+        const toolbar = Toolbar.create(markmapInstance.value)
+        markmapToolbarRef.value.innerHTML = ''
+        markmapToolbarRef.value.appendChild(toolbar.el)
+      }
+    }
+  } catch (e) {
+    console.error('markmap渲染失败:', e)
   }
+}
+
+function exportMindmapSVG() {
+  if (!markmapContainerRef.value) return
+  const svgData = new XMLSerializer().serializeToString(markmapContainerRef.value)
+  const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${topic.value}-mindmap.svg`
+  a.click()
+  URL.revokeObjectURL(url)
+  showActionFeedback('SVG已下载')
+}
+
+function exportMindmapHTML() {
+  if (!mindmapMarkdown.value) return
+  const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<script src="https://cdn.jsdelivr.net/npm/markmap-autoloader@latest"><\/script>
+<style>body{margin:0;padding:0;} .markmap{width:100%;height:100vh;}</style>
+</head><body>
+<textarea style="display:none">${mindmapMarkdown.value}</textarea>
+</body></html>`
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${topic.value}-mindmap.html`
+  a.click()
+  URL.revokeObjectURL(url)
+  showActionFeedback('HTML已下载')
 }
 
 function startProgress() {
@@ -362,10 +479,21 @@ function finishProgress() {
 }
 
 async function generateResource() {
+  if (loading.value) return // 防止重复点击
+  // 清理旧的轮询定时器
+  if (progressPollTimer) {
+    clearInterval(progressPollTimer)
+    progressPollTimer = null
+  }
   error.value = ''
   result.value = ''
   videoData.value = null
   videoError.value = ''
+  pptProgress.value = null
+  pptTaskId.value = ''
+  pptQueryUsed.value = ''
+  htmlContent.value = ''
+  htmlPreviewReady.value = false
   loading.value = true
   startProgress()
 
@@ -376,6 +504,17 @@ async function generateResource() {
 
   if (resourceType.value === 'mindmap') {
     await generateMindmapResource()
+    return
+  }
+
+  if (resourceType.value === 'ppt') {
+    if (pptMode.value === 'local') {
+      await generatePPTLocal()
+    } else if (pptMode.value === 'html') {
+      await generatePPTHtml()
+    } else {
+      await generatePPTResource()
+    }
     return
   }
 
@@ -407,6 +546,278 @@ async function generateResource() {
   } finally {
     loading.value = false
   }
+}
+
+async function generatePPTResource() {
+  try {
+    const res = await fetch('/api/aippt/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: topic.value,
+        optimize_model: selectedModel.value,
+        optimize_prompt: true,
+        author: 'EduAgent',
+        is_card_note: true,
+        search: false,
+        is_figure: true,
+        ai_image: 'normal',
+      }),
+    })
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error((errData as { detail?: string }).detail || `HTTP ${res.status}`)
+    }
+
+    const data = await res.json()
+    pptTaskId.value = data.sid
+    pptQueryUsed.value = data.optimized_query
+    pptProgress.value = {
+      sid: data.sid,
+      status: data.status === 'done' ? 'done' : 'building',
+      ppt_status: '',
+      ai_image_status: '',
+      card_note_status: '',
+      total_pages: data.total_pages,
+      done_pages: data.done_pages,
+      ppt_url: data.ppt_url,
+      cover_img: data.cover_img || '',
+      progress_percent: data.total_pages > 0 ? Math.round((data.done_pages / data.total_pages) * 100) : 0,
+    }
+
+    if (pptProgress.value.status === 'done') {
+      finishProgress()
+      trackBehavior('resource_generate', { resource_type: 'ppt' })
+    } else {
+      startProgressPolling()
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'PPT生成失败'
+    progressPercent.value = 0
+    if (progressTimer) clearInterval(progressTimer)
+    progressTimer = null
+    if (progressPollTimer) clearInterval(progressPollTimer)
+    progressPollTimer = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function generatePPTLocal() {
+  try {
+    const res = await fetch('/api/aippt/generate-local', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: topic.value,
+        model: selectedModel.value,
+        theme: pptTheme.value,
+      }),
+    })
+
+    if (!res.ok) {
+      let errMsg = `HTTP ${res.status}`
+      try {
+        const errData = await res.json()
+        errMsg = (errData as { detail?: string }).detail || errMsg
+      } catch {
+        // 非 JSON 响应
+      }
+      throw new Error(errMsg)
+    }
+
+    // 直接下载 .pptx 文件
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="?(.+?)"?$/)
+    a.download = match ? match[1] : `${topic.value.slice(0, 30)}.pptx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    finishProgress()
+    result.value = `本地PPT已生成并下载：${topic.value}`
+    await nextTick()
+    fetchRecommendations()
+    trackBehavior('resource_generate', { resource_type: 'ppt', mode: 'local' })
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '本地PPT生成失败'
+    progressPercent.value = 0
+    if (progressTimer) clearInterval(progressTimer)
+    progressTimer = null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function generatePPTHtml() {
+  try {
+    const res = await fetch('/api/aippt/generate-html', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: topic.value,
+        model: selectedModel.value,
+        theme: htmlTheme.value,
+        with_presenter: true,
+      }),
+    })
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}))
+      throw new Error((errData as { detail?: string }).detail || `HTTP ${res.status}`)
+    }
+
+    const data = await res.json()
+    htmlContent.value = data.html
+    htmlPreviewReady.value = true
+    finishProgress()
+    await nextTick()
+    fetchRecommendations()
+    trackBehavior('resource_generate', { resource_type: 'ppt', mode: 'html' })
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'HTML演示生成失败'
+    progressPercent.value = 0
+    if (progressTimer) clearInterval(progressTimer)
+    progressTimer = null
+  } finally {
+    loading.value = false
+  }
+}
+
+function openHtmlFullscreen() {
+  if (!htmlContent.value) return
+  const win = window.open('', '_blank')
+  if (!win) { alert('请允许弹出窗口'); return }
+  win.document.open()
+  win.document.write(htmlContent.value)
+  win.document.close()
+}
+
+function downloadHtml() {
+  if (!htmlContent.value) return
+  const blob = new Blob([htmlContent.value], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${topic.value.slice(0, 30)}.html`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  actionFeedback.value = 'HTML文件已下载'
+  setTimeout(() => { actionFeedback.value = '' }, 2000)
+}
+
+function startProgressPolling() {
+  if (progressPollTimer) clearInterval(progressPollTimer)
+  progressPollCount = 0
+  progressErrorCount = 0
+  progressPollTimer = setInterval(async () => {
+    if (!pptTaskId.value) {
+      if (progressPollTimer) clearInterval(progressPollTimer)
+      progressPollTimer = null
+      return
+    }
+
+    progressPollCount++
+    if (progressPollCount > MAX_PROGRESS_POLL) {
+      if (progressPollTimer) clearInterval(progressPollTimer)
+      progressPollTimer = null
+      pptProgress.value = { ...pptProgress.value!, status: 'failed' }
+      error.value = 'PPT生成超时，请重试'
+      return
+    }
+
+    try {
+      const res = await fetch('/api/aippt/progress', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: pptTaskId.value }),
+      })
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`)
+      }
+
+      const data = await res.json()
+      progressErrorCount = 0 // 成功时重置错误计数
+      pptProgress.value = {
+        sid: data.sid,
+        status: data.status,
+        ppt_status: data.ppt_status,
+        ai_image_status: data.ai_image_status,
+        card_note_status: data.card_note_status,
+        total_pages: data.total_pages,
+        done_pages: data.done_pages,
+        ppt_url: data.ppt_url,
+        cover_img: data.cover_img || '',
+        progress_percent: data.progress_percent,
+      }
+
+      progressPercent.value = data.progress_percent
+
+      if (data.status === 'done' || data.status === 'failed') {
+        if (progressPollTimer) clearInterval(progressPollTimer)
+        progressPollTimer = null
+        finishProgress()
+        if (data.status === 'done') {
+          trackBehavior('resource_generate', { resource_type: 'ppt' })
+        }
+      }
+    } catch (e) {
+      progressErrorCount++
+      console.error('轮询进度失败:', e)
+      if (progressErrorCount >= MAX_PROGRESS_ERRORS) {
+        if (progressPollTimer) clearInterval(progressPollTimer)
+        progressPollTimer = null
+        error.value = 'PPT进度查询连续失败，请稍后重试'
+      }
+      // 否则继续轮询，等待下次重试
+    }
+  }, 3000)
+}
+
+function downloadPPT() {
+  if (!pptProgress.value?.ppt_url) return
+  window.open(pptProgress.value.ppt_url, '_blank')
+  actionFeedback.value = '正在下载PPT...'
+  setTimeout(() => { actionFeedback.value = '' }, 2000)
+}
+
+async function previewPPT() {
+  if (!pptTaskId.value) return
+  pptPreviewLoading.value = true
+  pptPreviewError.value = ''
+  showPPTPreview.value = true
+  try {
+    const res = await fetch(`/api/aippt/outline?sid=${encodeURIComponent(pptTaskId.value)}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    pptOutline.value = await res.json()
+  } catch (e) {
+    pptOutline.value = null
+    pptPreviewError.value = e instanceof Error ? e.message : '获取大纲失败'
+  } finally {
+    pptPreviewLoading.value = false
+  }
+}
+
+function closePPTPreview() {
+  showPPTPreview.value = false
+}
+
+const VALID_RESOURCE_TYPES = new Set(['ppt', 'quiz', 'code', 'mindmap', 'video'])
+
+function applyRecommendation(item: RecommendationItem) {
+  if (!VALID_RESOURCE_TYPES.has(item.resource_type)) return
+  resourceType.value = item.resource_type as 'ppt' | 'quiz' | 'code' | 'mindmap' | 'video'
+  topic.value = item.topic || topic.value
+  generateResource()
 }
 
 async function generateVideoResource() {
@@ -455,13 +866,13 @@ async function generateMindmapResource() {
       throw new Error((errData as { detail?: string }).detail || `HTTP ${res.status}`)
     }
     const data = await res.json()
-    mermaidCode.value = data.mermaid_code ?? ''
+    mindmapMarkdown.value = data.markdown ?? ''
     result.value = data.markdown ?? ''
     if (data.session_id) sessionId.value = data.session_id
     finishProgress()
     await nextTick()
-    if (mermaidCode.value) {
-      await renderMermaidDiagram(mermaidCode.value)
+    if (mindmapMarkdown.value) {
+      await renderMarkmap(mindmapMarkdown.value)
     }
     fetchRecommendations()
     trackBehavior('resource_generate', { resource_type: 'mindmap' })
@@ -522,10 +933,20 @@ async function fetchRecommendations() {
 
 watch(resourceType, () => {
   result.value = ''
-  mermaidCode.value = ''
+  mindmapMarkdown.value = ''
+  if (markmapInstance.value) {
+    markmapInstance.value = null
+  }
   videoData.value = null
   error.value = ''
   videoError.value = ''
+  pptProgress.value = null
+  pptTaskId.value = ''
+  pptQueryUsed.value = ''
+  if (progressPollTimer) {
+    clearInterval(progressPollTimer)
+    progressPollTimer = null
+  }
 })
 
 watch(sessionId, (newId) => {
@@ -533,22 +954,31 @@ watch(sessionId, (newId) => {
 })
 
 onMounted(async () => {
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: 'default',
-    securityLevel: 'loose',
-    fontFamily: 'Inter, system-ui, sans-serif',
-  })
-  if (mermaidCode.value) {
-    renderMermaidDiagram(mermaidCode.value)
+  if (mindmapMarkdown.value && markmapContainerRef.value) {
+    renderMarkmap(mindmapMarkdown.value)
   }
   await fetchModels()
   checkModelStatus()
+
+  // 点击外部关闭模型下拉框
+  document.addEventListener('click', handleModelDropdownClickOutside)
 })
 
 onBeforeUnmount(() => {
   if (progressTimer) clearInterval(progressTimer)
+  if (progressPollTimer) clearInterval(progressPollTimer)
+  if (markmapInstance.value) {
+    markmapInstance.value.destroy()
+    markmapInstance.value = null
+  }
+  document.removeEventListener('click', handleModelDropdownClickOutside)
 })
+
+function handleModelDropdownClickOutside(e: MouseEvent) {
+  if (showModelDropdown.value && modelDropdownRef.value && !modelDropdownRef.value.contains(e.target as Node)) {
+    showModelDropdown.value = false
+  }
+}
 </script>
 
 <template>
@@ -588,7 +1018,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- AI 模型选择器 -->
-    <div class="relative">
+    <div class="relative" ref="modelDropdownRef">
       <div class="flex items-center gap-2 px-3 py-2 rounded-xl border border-surface-200 bg-white">
         <svg class="w-4 h-4 text-surface-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
@@ -681,6 +1111,58 @@ onBeforeUnmount(() => {
           </svg>
           生成
         </button>
+      </div>
+
+      <!-- PPT 模式切换（仅PPT类型时显示） -->
+      <div v-if="resourceType === 'ppt'" class="flex items-center gap-3 pt-1 flex-wrap">
+        <span class="text-xs text-surface-400">生成模式</span>
+        <div class="flex rounded-lg border border-surface-200 overflow-hidden">
+          <button
+            type="button"
+            class="px-3 py-1 text-xs font-medium transition-colors"
+            :class="pptMode === 'online' ? 'bg-brand-500 text-white' : 'bg-white text-surface-600 hover:bg-surface-50'"
+            @click="pptMode = 'online'"
+          >
+            在线生成
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1 text-xs font-medium transition-colors border-l border-surface-200"
+            :class="pptMode === 'local' ? 'bg-brand-500 text-white' : 'bg-white text-surface-600 hover:bg-surface-50'"
+            @click="pptMode = 'local'"
+          >
+            本地生成
+          </button>
+          <button
+            type="button"
+            class="px-3 py-1 text-xs font-medium transition-colors border-l border-surface-200"
+            :class="pptMode === 'html' ? 'bg-brand-500 text-white' : 'bg-white text-surface-600 hover:bg-surface-50'"
+            @click="pptMode = 'html'"
+          >
+            HTML演示
+          </button>
+        </div>
+        <span v-if="pptMode === 'online'" class="text-[10px] text-surface-400">讯飞智文API云端渲染</span>
+        <template v-else-if="pptMode === 'local'">
+          <span class="text-[10px] text-surface-400">使用 {{ availableModels.find(m => m.id === selectedModel)?.label || selectedModel }} 生成内容</span>
+          <select
+            v-model="pptTheme"
+            class="text-xs rounded border border-surface-200 bg-surface-50 px-2 py-0.5 focus:outline-none focus:border-brand-400"
+          >
+            <option value="default">蓝白商务</option>
+            <option value="dark">深色主题</option>
+            <option value="education">浅色学术</option>
+          </select>
+        </template>
+        <template v-else-if="pptMode === 'html'">
+          <span class="text-[10px] text-surface-400">浏览器可交互演示，支持键盘导航和主题切换</span>
+          <select
+            v-model="htmlTheme"
+            class="text-xs rounded border border-surface-200 bg-surface-50 px-2 py-0.5 focus:outline-none focus:border-brand-400"
+          >
+            <option v-for="t in htmlThemes" :key="t.id" :value="t.id">{{ t.label }}</option>
+          </select>
+        </template>
       </div>
     </div>
 
@@ -804,23 +1286,40 @@ onBeforeUnmount(() => {
           v-html="renderMarkdown(result)"
         />
 
-        <!-- 思维导图：Mermaid渲染 -->
+        <!-- 思维导图：Markmap交互式渲染 -->
         <div v-else-if="resourceType === 'mindmap'">
-          <div
-            v-if="mermaidCode && !mermaidRenderFailed"
-            ref="mermaidContainerRef"
-            class="flex justify-center overflow-auto max-h-[600px] p-2"
-          />
-          <div v-else-if="mermaidRenderFailed" class="space-y-3">
-            <div class="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-700 flex items-center gap-2">
-              <svg class="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-              </svg>
-              <span>Mermaid 渲染失败，已显示原始 Mermaid 代码</span>
+          <div v-if="mindmapMarkdown" class="rounded-2xl border border-surface-200 bg-white overflow-hidden shadow-sm">
+            <!-- 工具栏 -->
+            <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100 bg-surface-50/50">
+              <div class="flex items-center gap-3">
+                <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center text-white text-sm">
+                  🧠
+                </div>
+                <div>
+                  <div class="text-sm font-semibold text-surface-700">交互式思维导图</div>
+                  <div class="text-[10px] text-surface-400">滚轮缩放 · 拖拽平移 · 点击节点折叠/展开</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <div ref="markmapToolbarRef" class="markmap-toolbar" />
+                <button @click="exportMindmapSVG" class="rounded-lg px-3 py-1.5 text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100">
+                  <svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                  </svg>
+                  SVG
+                </button>
+                <button @click="exportMindmapHTML" class="rounded-lg px-3 py-1.5 text-xs font-medium text-white bg-brand-500 hover:bg-brand-600">
+                  <svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                  </svg>
+                  HTML
+                </button>
+              </div>
             </div>
-            <pre class="whitespace-pre-wrap text-sm text-surface-600 leading-relaxed max-h-[600px] overflow-y-auto">{{ mermaidCode }}</pre>
+            <!-- Markmap渲染区域 -->
+            <svg ref="markmapContainerRef" class="w-full" style="height: 500px;" />
           </div>
-          <pre v-else class="whitespace-pre-wrap text-sm text-surface-600 leading-relaxed max-h-[600px] overflow-y-auto">{{ mermaidCode }}</pre>
+          <div v-else class="text-sm text-surface-400 text-center py-8">点击生成按钮创建思维导图</div>
         </div>
 
         <!-- PPT / 题库 / 视频脚本：结构化渲染 -->
@@ -837,6 +1336,175 @@ onBeforeUnmount(() => {
             <div v-else class="text-surface-600">{{ block }}</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- PPT 生成结果 -->
+    <div v-if="pptProgress" class="animate-slide-up space-y-3">
+      <!-- PPT操作栏 -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span
+            class="text-[11px] font-semibold rounded-full px-2.5 py-0.5 bg-orange-50 text-orange-600"
+          >
+            PPT课件
+          </span>
+          <span class="text-xs text-surface-400">| {{ topic }}</span>
+          <span v-if="pptQueryUsed && pptQueryUsed !== topic" class="text-[10px] text-brand-500 bg-brand-50 px-1.5 py-0.5 rounded" :title="'AI优化查询: ' + pptQueryUsed">AI优化</span>
+          <span v-if="pptProgress.status === 'done'" class="text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">生成完成</span>
+          <span v-else-if="pptProgress.status === 'failed'" class="text-xs text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">生成失败</span>
+          <span v-else class="text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">生成中 {{ pptProgress.done_pages }}/{{ pptProgress.total_pages }}</span>
+        </div>
+        <div class="flex items-center gap-1.5">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-xs text-surface-500 hover:text-surface-700 hover:bg-surface-100 transition-colors flex items-center gap-1"
+            @click="generateResource"
+            :disabled="loading"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            重新生成
+          </button>
+        </div>
+      </div>
+
+      <!-- PPT进度展示 -->
+      <div v-if="pptProgress.status === 'building'" class="rounded-2xl border border-surface-200 bg-white p-5 space-y-3">
+        <div class="flex items-center justify-between text-sm">
+          <span class="text-surface-600 font-medium">正在生成PPT...</span>
+          <span class="text-brand-600 font-semibold">{{ pptProgress.progress_percent }}%</span>
+        </div>
+        <div class="h-2 bg-surface-100 rounded-full overflow-hidden">
+          <div
+            class="h-full bg-gradient-to-r from-brand-400 to-brand-600 rounded-full transition-all duration-300 ease-out"
+            :style="{ width: pptProgress.progress_percent + '%' }"
+          />
+        </div>
+        <div class="flex gap-3 text-[11px] text-surface-400">
+          <span :class="pptProgress.ppt_status === 'done' ? 'text-emerald-500' : pptProgress.ppt_status === 'building' ? 'text-brand-500' : ''">
+            ● PPT生成 {{ pptProgress.ppt_status === 'done' ? '完成' : pptProgress.ppt_status === 'building' ? '进行中' : '等待' }}
+          </span>
+          <span :class="pptProgress.ai_image_status === 'done' ? 'text-emerald-500' : pptProgress.ai_image_status === 'building' ? 'text-brand-500' : ''">
+            ● 配图 {{ pptProgress.ai_image_status === 'done' ? '完成' : pptProgress.ai_image_status === 'building' ? '进行中' : '等待' }}
+          </span>
+          <span :class="pptProgress.card_note_status === 'done' ? 'text-emerald-500' : pptProgress.card_note_status === 'building' ? 'text-brand-500' : ''">
+            ● 演讲备注 {{ pptProgress.card_note_status === 'done' ? '完成' : pptProgress.card_note_status === 'building' ? '进行中' : '等待' }}
+          </span>
+        </div>
+      </div>
+
+      <!-- PPT结果展示 -->
+      <div v-if="pptProgress.status === 'done'" class="rounded-2xl border border-surface-200 bg-white overflow-hidden">
+        <!-- 封面预览 -->
+        <div v-if="pptProgress.cover_img" class="relative">
+          <img
+            :src="pptProgress.cover_img"
+            :alt="topic"
+            class="w-full h-48 object-cover"
+          />
+          <div class="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
+          <div class="absolute bottom-4 left-4 right-4 flex items-end justify-between">
+            <div>
+              <div class="text-white font-semibold text-lg">{{ topic }}</div>
+              <div class="text-white/70 text-sm">{{ pptProgress.total_pages }} 页</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 操作区域 -->
+        <div class="p-5 flex items-center justify-between">
+          <div class="text-sm text-surface-500">
+            <div class="text-surface-700 font-medium">PPT课件已生成</div>
+            <div class="text-xs mt-1">共 {{ pptProgress.total_pages }} 页，包含演讲备注</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              :disabled="pptPreviewLoading"
+              @click="previewPPT"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+              </svg>
+              预览大纲
+            </button>
+            <button
+              type="button"
+              class="rounded-xl px-4 py-2 text-sm font-medium text-white bg-brand-500 hover:bg-brand-600 transition-colors flex items-center gap-2"
+              @click="downloadPPT"
+              :disabled="!pptProgress.ppt_url"
+            >
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+              </svg>
+              下载PPT
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- PPT生成失败 -->
+      <div v-if="pptProgress.status === 'failed'" class="rounded-2xl border border-rose-200 bg-rose-50 p-5">
+        <div class="flex items-center gap-3">
+          <svg class="w-5 h-5 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+          <div>
+            <div class="text-sm font-medium text-rose-700">PPT生成失败</div>
+            <div class="text-xs text-rose-500 mt-0.5">请重试或修改生成需求</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HTML PPT 演示预览 -->
+    <div v-if="htmlPreviewReady && htmlContent" class="animate-slide-up rounded-2xl border border-surface-200 bg-white overflow-hidden shadow-sm">
+      <!-- 预览头部 -->
+      <div class="flex items-center justify-between px-5 py-3 border-b border-surface-100 bg-surface-50/50">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-400 to-purple-500 flex items-center justify-center text-white text-sm">
+            ▶
+          </div>
+          <div>
+            <div class="text-sm font-semibold text-surface-700">HTML 演示文稿</div>
+            <div class="text-[10px] text-surface-400">← → 翻页 · F 全屏 · T 切换主题 · S 演讲者模式</div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-xs font-medium text-brand-600 bg-brand-50 hover:bg-brand-100 transition-colors flex items-center gap-1.5"
+            @click="openHtmlFullscreen"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+            </svg>
+            全屏演示
+          </button>
+          <button
+            type="button"
+            class="rounded-lg px-3 py-1.5 text-xs font-medium text-white bg-brand-500 hover:bg-brand-600 transition-colors flex items-center gap-1.5"
+            @click="downloadHtml"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            下载HTML
+          </button>
+        </div>
+      </div>
+      <!-- iframe 预览区域 -->
+      <div class="relative bg-surface-100" style="padding-bottom: 56.25%;">
+        <iframe
+          :srcdoc="htmlContent"
+          class="absolute inset-0 w-full h-full border-0"
+          sandbox="allow-scripts allow-same-origin allow-popups"
+          loading="lazy"
+        ></iframe>
       </div>
     </div>
 
@@ -898,7 +1566,7 @@ onBeforeUnmount(() => {
           v-for="item in recommendations"
           :key="item.id"
           class="rounded-xl border border-surface-200 hover:border-brand-200 hover:shadow-sm p-3 transition-all cursor-pointer group"
-          @click="resourceType = (item.resource_type as 'ppt' | 'quiz' | 'code' | 'mindmap' | 'video'); topic = item.topic || topic; generateResource()"
+          @click="applyRecommendation(item)"
         >
           <div class="flex items-center justify-between mb-1.5">
             <span
@@ -981,6 +1649,105 @@ onBeforeUnmount(() => {
           <div class="px-6 py-4 border-t border-surface-100 flex justify-end gap-3">
             <button type="button" class="px-4 py-2 text-sm text-surface-600 hover:text-surface-800 transition-colors" @click="showAddModelModal = false">取消</button>
             <button type="button" class="px-4 py-2 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" :disabled="addingModel" @click="addCustomModel()">{{ addingModel ? '添加中...' : '添加模型' }}</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+    <!-- PPT 大纲预览弹窗 -->
+    <transition name="modal">
+      <div v-if="showPPTPreview" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" @click.self="closePPTPreview">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden mx-4">
+          <!-- 弹窗头部 -->
+          <div class="flex items-center justify-between px-6 py-4 border-b border-surface-100">
+            <div class="flex items-center gap-3">
+              <div class="w-8 h-8 rounded-lg bg-orange-50 flex items-center justify-center text-orange-500">
+                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+              </div>
+              <div>
+                <h3 class="text-base font-semibold text-surface-800">PPT 大纲预览</h3>
+                <p v-if="pptOutline?.title" class="text-xs text-surface-400 mt-0.5">{{ pptOutline.title }}</p>
+              </div>
+            </div>
+            <button type="button" class="w-8 h-8 rounded-lg flex items-center justify-center text-surface-400 hover:text-surface-600 hover:bg-surface-100 transition-colors" @click="closePPTPreview">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- 弹窗内容 -->
+          <div class="flex-1 overflow-y-auto px-6 py-4">
+            <!-- 加载中 -->
+            <div v-if="pptPreviewLoading" class="flex flex-col items-center justify-center py-12 gap-3">
+              <svg class="w-8 h-8 text-brand-500 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              <span class="text-sm text-surface-400">加载大纲中...</span>
+            </div>
+
+            <!-- 大纲内容 -->
+            <div v-else-if="pptOutline?.outline_parsed?.length" class="space-y-4">
+              <!-- 标题信息 -->
+              <div v-if="pptOutline.title" class="text-center pb-3 border-b border-surface-100">
+                <h2 class="text-lg font-bold text-surface-800">{{ pptOutline.title }}</h2>
+                <p v-if="pptOutline.sub_title" class="text-sm text-surface-500 mt-1">{{ pptOutline.sub_title }}</p>
+              </div>
+
+              <!-- 章节列表 -->
+              <div v-for="(chapter, ci) in pptOutline.outline_parsed" :key="ci" class="rounded-xl border border-surface-200 overflow-hidden">
+                <div class="bg-surface-50 px-4 py-2.5 flex items-center gap-2">
+                  <span class="w-6 h-6 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-xs font-bold">{{ ci + 1 }}</span>
+                  <span class="font-medium text-surface-700 text-sm">{{ chapter.chapterTitle || chapter.title || `第${ci + 1}章` }}</span>
+                </div>
+                <div class="px-4 py-2 space-y-1.5">
+                  <div
+                    v-for="(section, si) in (chapter.chapterSections || chapter.sections || [])"
+                    :key="si"
+                    class="flex items-start gap-2 text-sm text-surface-600 py-1"
+                  >
+                    <span class="w-1.5 h-1.5 rounded-full bg-brand-400 mt-1.5 shrink-0"></span>
+                    <span>{{ section.sectionTitle || section.title || `小节 ${si + 1}` }}</span>
+                  </div>
+                  <div v-if="!(chapter.chapterSections || chapter.sections || []).length" class="text-xs text-surface-400 py-1">暂无详细小节</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 原始大纲（解析失败时展示） -->
+            <div v-else-if="pptOutline?.outline" class="prose prose-sm max-w-none">
+              <pre class="whitespace-pre-wrap text-sm text-surface-600 bg-surface-50 rounded-xl p-4 border border-surface-200">{{ pptOutline.outline }}</pre>
+            </div>
+
+            <!-- 无数据 -->
+            <div v-else class="flex flex-col items-center justify-center py-12 gap-2">
+              <svg class="w-10 h-10 text-surface-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              <span v-if="pptPreviewError" class="text-sm text-rose-500">{{ pptPreviewError }}</span>
+              <span v-else class="text-sm text-surface-400">暂无大纲数据</span>
+            </div>
+          </div>
+
+          <!-- 弹窗底部 -->
+          <div class="px-6 py-3 border-t border-surface-100 flex justify-between items-center">
+            <span class="text-xs text-surface-400">共 {{ pptOutline?.outline_parsed?.length || 0 }} 个章节</span>
+            <div class="flex items-center gap-2">
+              <button type="button" class="px-4 py-2 text-sm text-surface-600 hover:text-surface-800 transition-colors" @click="closePPTPreview">关闭</button>
+              <button
+                type="button"
+                class="px-4 py-2 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                :disabled="!pptProgress?.ppt_url"
+                @click="downloadPPT(); closePPTPreview()"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                </svg>
+                下载PPT
+              </button>
+            </div>
           </div>
         </div>
       </div>
